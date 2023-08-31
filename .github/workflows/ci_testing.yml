@@ -75,7 +75,6 @@ jobs:
           environment-file: doc_environment.yml
           auto-activate-base: false
           auto-update-conda: true
-
       - name: Check doc build environment
         run: |
           conda list
