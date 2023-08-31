@@ -8,10 +8,6 @@ on:
     branches:
       - docs_workflow #docs_workflow
 
-  pull_request_target:
-    types:
-      - closed
-
 jobs:
   Build-and-Test-LinuxOsx:
     runs-on: ${{ matrix.os }}
@@ -61,16 +57,13 @@ jobs:
           fail_ci_if_error: true
           verbose: true
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.9'
-      - name: Build Docs
-        if: |
-          matrix.os == 'ubuntu-latest' && 
-          matrix.python-version == '3.11' && 
-          github.event.pull_request.merged == true
-        run: |
-          conda install doxygen
-          cd docs
-          doxygen ./Doxyfile
-          make html SOURCEDIR=.
+      # - name: Build Docs
+      #   if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+      #   run: |
+      #     conda install doxygen
+      #     cd docs
+      #     doxygen ./Doxyfile
+      #     make html SOURCEDIR=.
       # - name: Set AWS credentials for upload
       #   uses: aws-actions/configure-aws-credentials@0e613a0980cbf65ed5b322eb7a1e075d28913a83
       #   with:
