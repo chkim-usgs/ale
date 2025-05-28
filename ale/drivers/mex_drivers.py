@@ -5,9 +5,9 @@ import numpy as np
 
 import pvl
 import struct
-import spiceypy as spice
 import warnings
 
+from pyspiceql import pyspiceql
 from ale.base import Driver
 from ale.base.data_isis import read_table_data
 from ale.base.data_isis import parse_table
@@ -69,7 +69,7 @@ FILTER_SPECIFIC_LOOKUP = {
             [-8569.5561557859, 0.068566503695773, 142.857126402363]],
 }
 
-class MexHrscPds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDistortion, Driver):
+class MexHrscPds3LabelNaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDistortion, Driver):
     """
     Driver for a PDS3 Mars Express (Mex) High Resolution Stereo Camera (HRSC) images.
 
@@ -102,7 +102,9 @@ class MexHrscPds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDistortion
         : int
           Naif ID used to for identifying the instrument in Spice kernels
         """
-        return spice.bods2c("MEX_HRSC_HEAD")
+        if not hasattr(self, "_ikid"):
+            self._ikid = self.spiceql_call("translateNameToCode", {"frame": "MEX_HRSC_HEAD", "mission": self.spiceql_mission})
+        return self._ikid
 
 
     @property
@@ -120,7 +122,9 @@ class MexHrscPds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDistortion
         : int
           Naif ID code used in calculating focal length
         """
-        return spice.bods2c(self.instrument_id)
+        if not hasattr(self, "_fikid"):
+            self._fikid = self.spiceql_call("translateNameToCode", {"frame": self.instrument_id, "mission": self.spiceql_mission})
+        return self._fikid
 
 
     # TODO Since HRSC has different frames based on filters, need to check that
@@ -492,7 +496,6 @@ class MexHrscPds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDistortion
         """
         return 1
 
-
 class MexHrscIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDistortion, Driver):
   
   @property
@@ -625,7 +628,9 @@ class MexHrscIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
       : int
         Naif ID used to for identifying the instrument in Spice kernels
       """
-      return spice.bods2c("MEX_HRSC_HEAD")
+      if not hasattr(self, "_ikid"):
+          self._ikid = self.spiceql_call("translateNameToCode", {"frame": "MEX_HRSC_HEAD", "mission": self.spiceql_mission})
+      return self._ikid
 
   @property
   def fikid(self):
@@ -642,7 +647,9 @@ class MexHrscIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
       : int
         Naif ID code used in calculating focal length
       """
-      return spice.bods2c(self.instrument_id)
+      if not hasattr(self, "_fikid"):
+          self._fikid = self.spiceql_call("translateNameToCode", {"frame": self.instrument_id, "mission": self.spiceql_mission})
+      return self._fikid
 
   @property
   def focal_length(self):
@@ -676,7 +683,6 @@ class MexHrscIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
       """
       return FILTER_SPECIFIC_LOOKUP[self.fikid][4]
 
-
   @property
   def focal2pixel_samples(self):
       """
@@ -707,23 +713,30 @@ class MexHrscIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
       summing = self.label['IsisCube']['Instrument'].get("Summing", 1)
       return summing
 
-class MexSrcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driver):
+SRC_FOCAL2PIXEL = {"lines": [0.0, 0.0, 111.111111111111],
+                   "samples": [0.0, 111.111111111111, 0.0]}
+SRC_DETECTOR_CENTER = {"line": 512.0,
+                       "sample": 512.0}
+
+class MexSrcPds3LabelNaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driver):
     """
-    Driver for a PDS3 Mars Express (Mex) High Resolution Stereo Camera (HRSC) - Super Resolution 
+    Driver for a PDS3 Mars Express (Mex) High Resolution Stereo Camera (HRSC) - Super Resolution
     Channel (SRC) image.
     """
 
     @property
     def ikid(self):
         """
-        Returns the Naif ID code for HRSC SRC. 
+        Returns the Naif ID code for HRSC SRC.
 
         Returns
         -------
         : int
           Naif ID used to for identifying the instrument in Spice kernels
         """
-        return spice.bods2c("MEX_HRSC_SRC")
+        if not hasattr(self, "_ikid"):
+            self._ikid = self.spiceql_call("translateNameToCode", {"frame": "MEX_HRSC_SRC", "mission": self.spiceql_mission})
+        return self._ikid
 
 
     @property
@@ -741,6 +754,36 @@ class MexSrcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driv
         if(super().instrument_id != "HRSC"):
             raise Exception ("Instrument ID is wrong.")
         return self.label['DETECTOR_ID']
+
+
+    @property
+    def sensor_name(self):
+        """
+        Returns the name of the instrument. Need to over-ride isis_label because
+        InstrumentName is not defined in the ISIS label for MEX SRC cubes.
+
+        Returns
+        -------
+        : str
+          Name of the sensor
+        """
+        return self.instrument_id
+
+
+    @property
+    def ephemeris_start_time(self):
+        """
+        ISIS uses the start time from the PDS label to determine the
+        ephemeris time. Since we want the center time ((ephemeris_start_time + ephemeris_start_time) / 2) 
+        to be equal to that, we can space the start time back half an 
+        exposure duration
+
+        Returns
+        -------
+        : double
+          Starting ephemeris time of the image
+        """
+        return self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")}) - (self.exposure_duration / 2)
 
 
     @property
@@ -769,7 +812,7 @@ class MexSrcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driv
         : list<double>
           focal plane to detector lines
         """
-        return [0.0, 0.0, 111.111111111111]
+        return SRC_FOCAL2PIXEL["lines"]
 
 
     @property
@@ -782,7 +825,7 @@ class MexSrcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driv
         : list<double>
           focal plane to detector samples
         """
-        return [0.0, 111.111111111111, 0.0]
+        return SRC_FOCAL2PIXEL["samples"]
 
 
     @property
@@ -795,7 +838,7 @@ class MexSrcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driv
         : float
           Detector line of the principal point
         """
-        return 512.0
+        return SRC_DETECTOR_CENTER["line"]
 
 
     @property
@@ -812,7 +855,7 @@ class MexSrcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driv
         : float
           Detector sample of the principal point
         """
-        return 512.0
+        return SRC_DETECTOR_CENTER["sample"]
 
 
     @property
@@ -823,4 +866,139 @@ class MexSrcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driv
         : int
           ISIS sensor model version
         """
-        return 1
+        return 2
+
+class MexSrcIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion, Driver):
+    """
+    Driver for an ISIS Mars Express (Mex) High Resolution Stereo Camera (HRSC) - Super Resolution 
+    Channel (SRC) cube.
+    """
+
+    @property
+    def ikid(self):
+        """
+        Returns the Naif ID code for HRSC SRC. 
+
+        Returns
+        -------
+        : int
+          Naif ID used to for identifying the instrument in Spice kernels
+        """
+        if not hasattr(self, "_ikid"):
+          self._ikid = self.spiceql_call("translateNameToCode", {"frame": "MEX_HRSC_SRC".format(super().instrument_id), "mission": self.spiceql_mission})
+        return self._ikid
+
+
+    @property
+    def instrument_id(self):
+        """
+        Returns the short name of the instrument
+
+        MEX HRSC has nine different filters each with their own name.
+
+         Returns
+        -------
+        : str
+          Short name of the instrument
+        """
+        if(super().instrument_id != "SRC"):
+            raise Exception ("Instrument ID is wrong.")
+        return self.label['IsisCube']['Archive']['DetectorId']
+
+
+    @property
+    def sensor_name(self):
+        """
+        Returns the name of the instrument. Need to over-ride isis_label because
+        InstrumentName is not defined in the ISIS label for MEX SRC cubes.
+
+        Returns
+        -------
+        : str
+          Name of the sensor
+        """
+        return self.instrument_id
+
+
+    @property
+    def ephemeris_start_time(self):
+        """
+        ISIS uses the start time from the PDS label to determine the
+        inital ephemeris time. Since we want the center time to be equal to that,
+        we can space the start time back half an exposure duration
+
+        Returns
+        -------
+        : double
+          Starting ephemeris time of the image
+        """
+        
+        return self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")}) - (self.exposure_duration / 2)
+
+
+    @property
+    def focal2pixel_lines(self):
+        """
+        NOTE: These values are pulled from ISIS iak kernels.
+
+        Returns
+        -------
+        : list<double>
+          focal plane to detector lines
+        """
+        return SRC_FOCAL2PIXEL["lines"]
+
+
+    @property
+    def focal2pixel_samples(self):
+        """
+        NOTE: These values are pulled from ISIS iak kernels.
+
+        Returns
+        -------
+        : list<double>
+          focal plane to detector samples
+        """
+        return SRC_FOCAL2PIXEL["samples"]
+
+
+    @property
+    def detector_center_line(self):
+        """
+        Returns the center detector line.
+
+        Returns
+        -------
+        : float
+          Detector line of the principal point
+        """
+        return SRC_DETECTOR_CENTER["line"]
+
+
+    @property
+    def detector_center_sample(self):
+        """
+        Returns the center detector sample.
+
+        This is
+        different from ISIS's center sample because ISIS uses
+        0.5-based samples.
+
+        Returns
+        -------
+        : float
+          Detector sample of the principal point
+        """
+        return SRC_DETECTOR_CENTER["sample"]
+
+
+
+    @property
+    def sensor_model_version(self):
+        """
+        Returns
+        -------
+        : int
+          ISIS sensor model version
+        """
+        return 2
