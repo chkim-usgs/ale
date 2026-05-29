@@ -35,6 +35,9 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+- Nadir velocity axis is now computed from the `INS<ikid>_TRANSX` keyword with a `[1] < [2]` index comparison, matching ISIS's `SpiceRotation::setEphemerisTimeNadir`. [#713](https://github.com/DOI-USGS/ale/pull/713)
+
 ## [1.2.0] - 2026-05-20
 
 ### Added
