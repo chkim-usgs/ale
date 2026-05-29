@@ -57,7 +57,9 @@ namespace ale {
       Impl() : quat(Eigen::Quaterniond::Identity()) { }
 
 
-      Impl(double w, double x, double y, double z) : quat(w, x, y, z) { }
+      Impl(double w, double x, double y, double z) : quat(w, x, y, z) {
+        quat = quat.normalized();
+      }
 
 
       Impl(const std::vector<double>& matrix) {
@@ -144,8 +146,7 @@ namespace ale {
 
 
   std::vector<double> Rotation::toQuaternion() const {
-    Eigen::Quaterniond normalized = m_impl->quat.normalized();
-    return {normalized.w(), normalized.x(), normalized.y(), normalized.z()};
+    return {m_impl->quat.w(), m_impl->quat.x(), m_impl->quat.y(), m_impl->quat.z()};
   }
 
 
