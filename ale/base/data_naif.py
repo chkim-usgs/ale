@@ -3,7 +3,6 @@ import spiceypy as spice
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import as_completed
-import logging
 import json 
 import os
 
@@ -44,7 +43,7 @@ class NaifSpice():
         elif isinstance(self.kernels, dict) and not self.use_web and not self.search_kernels:
             self.kset = pyspiceql.KernelSet(self.kernels)
         elif not self.use_web:
-            logger.warn("No kernels were specified. No kernels will be loaded.")
+            logger.warning("No kernels were specified. No kernels will be loaded.")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -92,6 +91,8 @@ class NaifSpice():
             if 'kernels' in self._props.keys():
                 try:
                     self._kernels = kernel_access.get_kernels_from_isis_pvl(self._props['kernels'])
+                    # Report/record metakernel here?
+                    logger.error(f"self.kernels: {self._kernels}")
                 except Exception as e:
                     if isinstance(self._props['kernels'], list):
                         self._kernels = { "misc": self._props['kernels'] }
@@ -115,8 +116,9 @@ class NaifSpice():
                 if spice_root:
                     search_results = kernel_access.get_metakernels(spice_root, missions=self.short_mission_name, years=self.utc_start_time.year, versions='latest')
                     if search_results['count'] != 0:
-                        self._kernels = [search_results['data'][0]['path']]
-                        logger.debug(f"Found metakernel: {self._kernels}")
+                        logger.debug(f"Found metakernel: {search_results['data'][0]['path']}")
+                        self._kernels = kernel_access.get_kernels_from_metakernel(search_results['data'][0]['path'])
+                        logger.debug(f"Retrieved kernels: {self._kernels}")
 
                 if self._kernels == {}:
                     logger.debug("Failed to find metakernels, falling back to SpiceQL")

@@ -1,15 +1,21 @@
 from importlib import reload
+import os
 from os.path import join
+from pathlib import Path
 
 import pytest
 import tempfile
 import pvl
 from unittest.mock import MagicMock, patch
 
+from conftest import get_image_label, get_image_kernels, convert_kernels
+
 from collections import OrderedDict
 
 import ale
 from ale import kernel_access
+from ale.drivers.mro_drivers import MroCtxIsisLabelNaifSpiceDriver
+from ale import spice_root
 
 @pytest.fixture
 def cube_kernels():
@@ -45,6 +51,25 @@ def pvl_four_group():
       Messenger    = $ISIS3DATA/messenger
     EndGroup
     """
+
+def test_get_kernels_from_metakernel():
+
+    mro_test_mk = join(Path(__file__).parent.absolute(), 'data', 'kernel_access', 'mro_test_mk.tm')
+    mro_test_path = join(Path(__file__).parent.absolute(), 'data', 'B10_013341_1010_XN_79S172W')
+
+    kernels_from_mk = kernel_access.get_kernels_from_metakernel(mro_test_mk, mro_test_path)
+
+    mro_test_kernels = ['B10_013341_1010_XN_79S172W_0.xsp',
+                        'B10_013341_1010_XN_79S172W_1.xsp',
+                        'mro_ctx_v11.ti',
+                        'mro_sc_psp_090526_090601_0_sliced_-74000.xc',
+                        'mro_sc_psp_090526_090601_1_sliced_-74000.xc',
+                        'mro_sclkscet_00082_65536.tsc']
+    
+    for index, kernel in enumerate(mro_test_kernels):
+        mro_test_kernels[index] = join(mro_test_path, kernel)
+
+    assert kernels_from_mk == mro_test_kernels
 
 def test_find_kernels(cube_kernels, tmpdir):
     ck_db = """

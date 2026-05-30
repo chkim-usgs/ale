@@ -37,6 +37,7 @@ release.
 
 ### Added
 - `MroHiRisePds3LabelNaifSpiceDriver`, a PDS3 EDR label driver for HiRISE that generates an ISD directly from a raw EDR label without requiring an ISIS cube, paralleling the existing CTX PDS3 driver. [#702](https://github.com/DOI-USGS/ale/pull/702)
+- Added a catch to try correcting paths in metakernels (using spice_root) if they have been left as default. [#703](https://github.com/DOI-USGS/ale/pull/703)
 
 ### Fixed
 - Fixed undefined behavior in Rotation::toRotationMatrix by normalizing the quaternion before converting it to a rotation matrix. See [Eigen 3.4.1 Docs](https://libeigen.gitlab.io/eigen/docs-3.4/classEigen_1_1QuaternionBase.html#a8cf07ab9875baba2eecdd62ff93bfc3f) [#711](https://github.com/DOI-USGS/ale/pull/711)
