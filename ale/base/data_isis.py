@@ -227,6 +227,14 @@ def rotate_state(table, rotation):
         rotated_vel = None
     return rotated_pos, rotated_vel, ephemeris_times
 
+
+def get_naif_keyword(self, ale_name, naif_key):
+    val = self.naif_keywords.get(naif_key, None)
+    if val is None:
+        raise LookupError('Could not find a value for {} using the NAIF Keyword {}. Available keys: {}'.format(ale_name, naif_key, list(self.naif_keywords.keys())))
+    return val
+
+
 class IsisSpice():
     """
     Mixin class for reading from an ISIS cube that has been spiceinit'd
@@ -414,7 +422,8 @@ class IsisSpice():
         list :
             The center of the CCD formatted as line, sample
         """
-        return self.naif_keywords.get('INS{}_BORESIGHT_SAMPLE'.format(self.ikid), None)
+           
+        return get_naif_keyword(self, 'detector_center_sample', 'INS{}_BORESIGHT_SAMPLE'.format(self.ikid))
 
     @property
     def detector_center_line(self):
@@ -428,7 +437,7 @@ class IsisSpice():
         list :
             The center of the CCD formatted as line, sample
         """
-        return self.naif_keywords.get('INS{}_BORESIGHT_LINE'.format(self.ikid), None)
+        return get_naif_keyword(self, 'detector_center_line', 'INS{}_BORESIGHT_LINE'.format(self.ikid))
 
 
     @property
@@ -494,7 +503,7 @@ class IsisSpice():
             The coefficients of the affine transformation
             formatted as constant, x, y
         """
-        return self.naif_keywords.get('INS{}_ITRANSL'.format(self.ikid), None)
+        return get_naif_keyword(self, 'focal2pixel_lines', 'INS{}_ITRANSL'.format(self.ikid))
 
     @property
     def focal2pixel_samples(self):
@@ -512,7 +521,7 @@ class IsisSpice():
             The coefficients of the affine transformation
             formatted as constant, x, y
         """
-        return self.naif_keywords.get('INS{}_ITRANSS'.format(self.ikid), None)
+        return get_naif_keyword(self, 'focal2pixel_samples', 'INS{}_ITRANSS'.format(self.ikid))
 
     @property
     def pixel2focal_x(self):
@@ -525,7 +534,7 @@ class IsisSpice():
         detector to focal plane x
         """
 
-        return self.naif_keywords.get('INS{}_TRANSX'.format(self.ikid), None)
+        return get_naif_keyword(self, 'pixel2focal_x', 'INS{}_TRANSX'.format(self.ikid))
 
     @property
     def pixel2focal_y(self):
@@ -538,7 +547,7 @@ class IsisSpice():
         detector to focal plane y
         """
 
-        return self.naif_keywords.get('INS{}_TRANSY'.format(self.ikid), None)
+        return get_naif_keyword(self, 'pixel2focal_y', 'INS{}_TRANSY'.format(self.ikid))
 
     @property
     def focal_length(self):
@@ -554,7 +563,8 @@ class IsisSpice():
         float :
             The focal length in millimeters
         """
-        return self.naif_keywords.get('INS{}_FOCAL_LENGTH'.format(self.ikid), None)
+
+        return get_naif_keyword(self, 'focal_length', 'INS{}_FOCAL_LENGTH'.format(self.ikid))
 
     @property
     def target_body_radii(self):
