@@ -91,8 +91,7 @@ class NaifSpice():
             if 'kernels' in self._props.keys():
                 try:
                     self._kernels = kernel_access.get_kernels_from_isis_pvl(self._props['kernels'])
-                    # Report/record metakernel here?
-                    logger.error(f"self.kernels: {self._kernels}")
+                    logger.debug(f"self.kernels: {self._kernels}")
                 except Exception as e:
                     if isinstance(self._props['kernels'], list):
                         self._kernels = { "misc": self._props['kernels'] }
