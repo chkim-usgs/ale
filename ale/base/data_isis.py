@@ -385,12 +385,15 @@ class IsisSpice():
                     # 2040). Pad to 16 in case this happens.
                     return str(key[1]).zfill(16)
 
-            # In gtiffs, looks like:
-            # "CLOCK_ET_-236_2":{
-            #     "0072174528:989000_COMPUTED":"4a1edaaeddcbbc41"
-            # }
+            
             elif isinstance(key, str) and key.startswith('CLOCK_ET_'):
+                if key.endswith('_COMPUTED'):
+                    return str(self.naif_keywords[key]).zfill(16)
                 for subkey in self.naif_keywords[key]:
+                    # For gtiffs in gdal < 3.13, like:
+                    # "CLOCK_ET_-236_2":{
+                    #     "0072174528:989000_COMPUTED":"4a1edaaeddcbbc41"
+                    # }
                     if subkey.endswith('_COMPUTED'):
                         return str(self.naif_keywords[key][subkey]).zfill(16)
                         
