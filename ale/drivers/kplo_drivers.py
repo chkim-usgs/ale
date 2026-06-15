@@ -2,6 +2,7 @@ import numpy as np
 import spiceypy as spice
 from pyspiceql import pyspiceql
 
+from ale import logger
 from ale.base import Driver, WrongInstrumentException
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
@@ -87,6 +88,32 @@ class KploShadowCamIsisLabelNaifSpiceDriver(LineScanner, NaifSpice, IsisLabel, D
                                           + self.constant_time_offset
                                           + self.tdi_offset_seconds)
         return self._ephemeris_start_time
+
+    @property
+    def ephemeris_time(self):
+        """
+        Forces a reduced set of ephemeris data for ShadowCam. Images can be
+        ~85K lines long, producing per-line ephemeris ISDs that are far too
+        large (tens of MB) to load efficiently into the CSM. Subsample by
+        default (reduction=linear), unless overridden via props. Mirrors the
+        Chandrayaan-2 driver, which has the same large-ISD problem.
+
+        Returns
+        -------
+        : ndarray
+            ephemeris times, subsampled by default
+        """
+        if not hasattr(self, "_ephemeris_time"):
+            reduction = self._props.get('reduction', 'none').lower()
+            if (reduction == 'none'):
+                logger.warning("ShadowCam: per-line ephemeris ISDs are very large. "
+                               "Defaulting reduction to 'linear'. Pass --reduction "
+                               "linear --ephem_sample_rate N to control the sampling. "
+                               "An explicit --reduction none cannot be respected for "
+                               "this sensor.")
+                self._props['reduction'] = 'linear'
+            self._ephemeris_time = super().ephemeris_time
+        return self._ephemeris_time
 
     @property
     def exposure_duration(self):
