@@ -2,12 +2,11 @@ import os
 from glob import glob
 
 import numpy as np
-
+from pyspiceql import pyspiceql
 import pvl
 import struct
 import warnings
 
-from pyspiceql import pyspiceql
 from ale.base import Driver, WrongInstrumentException
 from ale.base.data_isis import read_table_data
 from ale.base.data_isis import parse_table
@@ -103,7 +102,7 @@ class MexHrscPds3LabelNaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDisto
           Naif ID used to for identifying the instrument in Spice kernels
         """
         if not hasattr(self, "_ikid"):
-            self._ikid = self.spiceql_call("translateNameToCode", {"frame": "MEX_HRSC_HEAD", "mission": self.spiceql_mission})
+            self._ikid = pyspiceql.translateNameToCode(frame="MEX_HRSC_HEAD", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ikid
 
 
@@ -123,7 +122,7 @@ class MexHrscPds3LabelNaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDisto
           Naif ID code used in calculating focal length
         """
         if not hasattr(self, "_fikid"):
-            self._fikid = self.spiceql_call("translateNameToCode", {"frame": self.instrument_id, "mission": self.spiceql_mission})
+            self._fikid = pyspiceql.translateNameToCode(frame=self.instrument_id, mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._fikid
 
 
@@ -161,6 +160,23 @@ class MexHrscPds3LabelNaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDisto
         if(super().instrument_id != "HRSC"):
             raise WrongInstrumentException ("Instrument ID is wrong.")
         return self.label['DETECTOR_ID']
+
+
+    @property
+    def spiceql_mission(self):
+        """
+        All nine HRSC filter channels (including the stereo channels S1 and S2)
+        belong to the same SpiceQL "hrsc" mission. The instrument_id is filter
+        specific, so it cannot be used as a key into spiceql_mission_map, which
+        only lists one channel. Return the mission directly so every channel is
+        covered.
+
+        Returns
+        -------
+        : str
+          The spiceql mission string
+        """
+        return "hrsc"
 
 
     @property
@@ -514,6 +530,23 @@ class MexHrscIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
 
 
   @property
+  def spiceql_mission(self):
+      """
+      All nine HRSC filter channels (including the stereo channels S1 and S2)
+      belong to the same SpiceQL "hrsc" mission. The instrument_id is filter
+      specific, so it cannot be used as a key into spiceql_mission_map, which
+      only lists one channel. Return the mission directly so every channel is
+      covered.
+
+      Returns
+      -------
+      : str
+        The spiceql mission string
+      """
+      return "hrsc"
+
+
+  @property
   def sensor_name(self):
       """
       Returns the name of the instrument. Need to over-ride isis_label because
@@ -629,7 +662,7 @@ class MexHrscIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
         Naif ID used to for identifying the instrument in Spice kernels
       """
       if not hasattr(self, "_ikid"):
-          self._ikid = self.spiceql_call("translateNameToCode", {"frame": "MEX_HRSC_HEAD", "mission": self.spiceql_mission})
+          self._ikid = pyspiceql.translateNameToCode(frame="MEX_HRSC_HEAD", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
       return self._ikid
 
   @property
@@ -648,7 +681,7 @@ class MexHrscIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
         Naif ID code used in calculating focal length
       """
       if not hasattr(self, "_fikid"):
-          self._fikid = self.spiceql_call("translateNameToCode", {"frame": self.instrument_id, "mission": self.spiceql_mission})
+          self._fikid = pyspiceql.translateNameToCode(frame=self.instrument_id, mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
       return self._fikid
 
   @property
@@ -735,7 +768,7 @@ class MexSrcPds3LabelNaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion,
           Naif ID used to for identifying the instrument in Spice kernels
         """
         if not hasattr(self, "_ikid"):
-            self._ikid = self.spiceql_call("translateNameToCode", {"frame": "MEX_HRSC_SRC", "mission": self.spiceql_mission})
+            self._ikid = pyspiceql.translateNameToCode(frame="MEX_HRSC_SRC", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ikid
 
 
@@ -784,7 +817,7 @@ class MexSrcPds3LabelNaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion,
         : double
           Starting ephemeris time of the image
         """
-        return self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")}) - (self.exposure_duration / 2)
+        return pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0] - (self.exposure_duration / 2)
 
 
     @property
@@ -886,7 +919,7 @@ class MexSrcIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion,
           Naif ID used to for identifying the instrument in Spice kernels
         """
         if not hasattr(self, "_ikid"):
-          self._ikid = self.spiceql_call("translateNameToCode", {"frame": "MEX_HRSC_SRC".format(super().instrument_id), "mission": self.spiceql_mission})
+          self._ikid = pyspiceql.translateNameToCode(frame="MEX_HRSC_SRC", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ikid
 
 
@@ -934,7 +967,7 @@ class MexSrcIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion,
           Starting ephemeris time of the image
         """
         
-        return self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")}) - (self.exposure_duration / 2)
+        return pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0] - (self.exposure_duration / 2)
 
 
     @property

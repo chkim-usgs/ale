@@ -36,13 +36,41 @@ release.
 ## [Unreleased]
 
 ### Added
+- `MroHiRisePds3LabelNaifSpiceDriver`, a PDS3 EDR label driver for HiRISE that generates an ISD directly from a raw EDR label without requiring an ISIS cube, paralleling the existing CTX PDS3 driver. [#702](https://github.com/DOI-USGS/ale/pull/702)
+- Added a catch to try correcting paths in metakernels (using spice_root) if they have been left as default. [#703](https://github.com/DOI-USGS/ale/pull/703)
 - Added ISD to kernel feature [#602](https://github.com/DOI-USGS/ale/issues/602)
 
 ### Changed
-- Reduced linescan ISD ephemeris sampling from one-per-line to every 10th line for images with 1000+ lines, significantly reducing ISD file sizes and load times for large sensors. Configurable via `reduction` and `ephem_sample_rate` props. [#677](https://github.com/DOI-USGS/ale/pull/677)
+- The KPLO ShadowCam driver now subsamples the ephemeris by default (linear reduction, one sample per ~10 lines), as the Chandrayaan-2 driver does, so ISDs for the long ShadowCam strips no longer reach ~20 MB. When the driver defaults the reduction (including when the caller passes `--reduction none`, which cannot be respected for this sensor), it now logs a notice via the ale logger. The Chandrayaan-2 TMC-2 and OHRC drivers, which override the reduction the same way, log the same notice. [#719](https://github.com/DOI-USGS/ale/pull/719)
+
+### Fixed
+- Fixed undefined behavior in Rotation::toRotationMatrix by normalizing the quaternion before converting it to a rotation matrix. See [Eigen 3.4.1 Docs](https://libeigen.gitlab.io/eigen/docs-3.4/classEigen_1_1QuaternionBase.html#a8cf07ab9875baba2eecdd62ff93bfc3f) [#711](https://github.com/DOI-USGS/ale/pull/711)
+- Nadir velocity axis is now computed from the `INS<ikid>_TRANSX` keyword with a `[1] < [2]` index comparison, matching ISIS's `SpiceRotation::setEphemerisTimeNadir`. [#713](https://github.com/DOI-USGS/ale/pull/713)
+- Fixed `KeyError: 'MEX_HRSC_S1'` when generating an ISD for the MEX HRSC stereo channels (and any non-IR filter channel). The HRSC drivers now override `spiceql_mission` to return `hrsc`, matching the pattern used by the KPLO and Mariner drivers, instead of looking up the filter-specific instrument id in `spiceql_mission_map`, which only lists one channel. [#716](https://github.com/DOI-USGS/ale/pull/716)
+- Fixed printing kernel info via Error message, now a debug message instead. [#717](https://github.com/DOI-USGS/ale/pull/717)
+- Fixed CLOCK_ET in GTIFFs when they are not slash-separated [#718](https://github.com/DOI-USGS/ale/pull/718)
+
+## [1.2.0] - 2026-05-20
+
+### Added
+
+- Added a return_driver boolean flag to ale.drivers.load to specify the return of a driver instead of an ISD. [#700](https://github.com/DOI-USGS/ale/pull/700)
+- Added the ability to reduce linescan ISD ephemeris sampling from one-per-line to every Nth line, significantly reducing ISD file sizes and load times for large sensors. Configurable via `reduction` and `ephem_sample_rate` props. [#677](https://github.com/DOI-USGS/ale/pull/677)
+- Added an ISIS-label/NAIF-SPICE driver for KPLO ShadowCam. [#709](https://github.com/DOI-USGS/ale/pull/709)
+
+### Changed
+- Changed chandrayaan2 drivers to reduce the number of ephemeris times obtained, applying a linear reduction. [#707](https://github.com/DOI-USGS/ale/pull/707)
+- Throw error when input file does not exist. [#692](https://github.com/DOI-USGS/ale/pull/692)
+- Read in ISIS SPICE Tables from GDAL .tiff [#697](https://github.com/DOI-USGS/ale/pull/697)
+- Changed all `spiceql_call` functions to use pyspiceql [#695](https://github.com/DOI-USGS/ale/pull/695)
 
 ### Fixed
 - Fixed Eigen 5.x compatibility by removing version constraint in CMakeLists.txt [#677](https://github.com/DOI-USGS/ale/pull/677)
+- Fixed C++ load(s) call failing when called again after throwing an error [#696](https://github.com/DOI-USGS/ale/pull/696)
+- Fixed misleading "No Such Driver for Label" from `isd_generate` when ALESPICEROOT is unset and no kernel-source flag is given. The CLI now exits early with a message naming ALESPICEROOT and the alternative flags (`--kernel`/`--search-kernels`/`--use-web-spice`/`--only-isis-spice`). [#704](https://github.com/DOI-USGS/ale/pull/704)
+- Fixed `get_metakernels()` mis-parsing `mission_year.tm` filenames (no version segment), e.g. `lro_2013.tm`, as `year='N/A', version='2013'`. With `versions='latest'`, this caused `lro_2018.tm` to be picked over `lro_2013.tm` regardless of cube date. Now parsed correctly as `year='2013', version='N/A'`.
+- Fixed metakernels with relative `PATH_VALUES` (e.g. `..`) silently failing when invoked from a working directory other than the metakernel's own directory. `NaifSpice.__enter__` now `chdir`s to each metakernel's directory around `pyspiceql.load`, then restores the prior working directory.
+
 
 ## [1.1.3] - 2026-03-12
 

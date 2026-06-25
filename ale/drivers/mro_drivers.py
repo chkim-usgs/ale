@@ -1,3 +1,5 @@
+import pyspiceql
+
 from ale.base import Driver, WrongInstrumentException
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice
@@ -57,7 +59,7 @@ class MroMarciIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDist
           Naif ID used to for identifying the instrument in Spice kernels
         """
         if not hasattr(self, "_base_ikid"):
-            self._base_ikid = self.spiceql_call("translateNameToCode", {"frame": "MRO_MARCI", "mission": self.spiceql_mission})
+            self._base_ikid = pyspiceql.translateNameToCode(frame="MRO_MARCI", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._base_ikid
 
     @property
@@ -254,7 +256,7 @@ class MroMarciIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDist
           Dictionary of keywords and values that ISIS creates and attaches to the label
         """
         if not hasattr(self, "_naif_keywords"):
-          self._naif_keywords = {**super().naif_keywords, **self.spiceql_call("findMissionKeywords", {"key": f"*{self.base_ikid}*", "mission": self.spiceql_mission})}
+          self._naif_keywords = {**super().naif_keywords, **pyspiceql.findMissionKeywords(key=f"*{self.base_ikid}*", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]}
         return self._naif_keywords
 
     @property
@@ -533,6 +535,282 @@ hirise_ccd_lookup = {
   13: 9
 }
 
+class MroHiRisePds3LabelNaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, RadialDistortion, Driver):
+    """
+    Driver for reading HiRISE PDS3 EDR labels directly, without requiring
+    an ISIS cube.  Uses NaifSpice for ephemeris data (via SpiceQL local
+    or web service).
+
+    This enables fully ISIS-free processing from PDS EDR download to
+    map-projected GeoTIFF.
+
+    See Also
+    --------
+    MroHiRiseIsisLabelNaifSpiceDriver : equivalent driver for ISIS cube labels.
+    """
+
+    @property
+    def instrument_id(self):
+        """
+        Returns
+        -------
+        : str
+          NAIF instrument identifier
+        """
+        id_lookup = {
+            'HIRISE': 'MRO_HIRISE',
+            'HIGH RESOLUTION IMAGING SCIENCE EXPERIMENT': 'MRO_HIRISE',
+        }
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
+
+    @property
+    def spacecraft_name(self):
+        """
+        HiRISE PDS3 EDR labels carry INSTRUMENT_HOST_NAME rather than
+        SPACECRAFT_NAME, so resolve the name from the base platform_name
+        (which returns INSTRUMENT_HOST_NAME for a PDS3 label).
+
+        Returns
+        -------
+        : str
+          Spacecraft name for NAIF lookups
+        """
+        name_lookup = {
+            'MARS RECONNAISSANCE ORBITER': 'MRO'
+        }
+        return name_lookup[super().platform_name]
+
+    @property
+    def sensor_name(self):
+        """
+        Returns
+        -------
+        : str
+          Sensor name
+        """
+        return "HIRISE CAMERA"
+
+    @property
+    def _inst_settings(self):
+        """Access the INSTRUMENT_SETTING_PARAMETERS group."""
+        return self.label['INSTRUMENT_SETTING_PARAMETERS']
+
+    @property
+    def _time_params(self):
+        """Access the TIME_PARAMETERS group."""
+        return self.label['TIME_PARAMETERS']
+
+    @property
+    def spacecraft_clock_start_count(self):
+        """
+        Returns
+        -------
+        : str
+          Spacecraft clock start count from PDS3 label
+        """
+        return str(self._time_params['SPACECRAFT_CLOCK_START_COUNT'])
+
+    @property
+    def spacecraft_clock_stop_count(self):
+        """
+        Returns
+        -------
+        : str
+          Spacecraft clock stop count from PDS3 label
+        """
+        count = str(self._time_params.get('SPACECRAFT_CLOCK_STOP_COUNT', 'N/A'))
+        if count == 'N/A':
+            count = None
+        return count
+
+    @property
+    def utc_start_time(self):
+        """
+        Returns
+        -------
+        : str
+          Start time from PDS3 label
+        """
+        return self._time_params['START_TIME']
+
+    @property
+    def utc_stop_time(self):
+        """
+        Returns
+        -------
+        : str
+          Stop time from PDS3 label
+        """
+        return self._time_params['STOP_TIME']
+
+    @property
+    def _cpmm_number(self):
+        return int(self._inst_settings['MRO:CPMM_NUMBER'])
+
+    @property
+    def _tdi_mode(self):
+        return int(self._inst_settings['MRO:TDI'])
+
+    @property
+    def _bin_mode(self):
+        return int(self._inst_settings['MRO:BINNING'])
+
+    @property
+    def _delta_line_timer_count(self):
+        return int(self._inst_settings['MRO:DELTA_LINE_TIMER_COUNT'])
+
+    @property
+    def line_summing(self):
+        return self._bin_mode
+
+    @property
+    def sample_summing(self):
+        return self._bin_mode
+
+    @property
+    def un_binned_rate(self):
+        """
+        Compute the un-binned line rate from DeltaLineTimerCount.
+        Matches the ISIS HiRise camera model.
+
+        Returns
+        -------
+        : float
+          Un-binned line rate in seconds
+        """
+        if not hasattr(self, "_un_binned_rate"):
+            self._un_binned_rate = (74.0 + (self._delta_line_timer_count / 16.0)) / 1000000.0
+        return self._un_binned_rate
+
+    @property
+    def ephemeris_start_time(self):
+        """
+        Compute ephemeris start time, matching the ISIS HiRise camera model.
+
+        Returns
+        -------
+        : float
+          Starting ephemeris time
+        """
+        if not hasattr(self, "_ephemeris_start_time"):
+            tdi_mode = self._tdi_mode
+            bin_mode = self._bin_mode
+            start_time = pyspiceql.strSclkToEt(frameCode=-74999,
+                                               sclk=self.spacecraft_clock_start_count,
+                                               mission=self.spiceql_mission,
+                                               searchKernels=self.search_kernels,
+                                               useWeb=self.use_web)[0]
+            start_time -= self.un_binned_rate * ((tdi_mode / 2.0) - 0.5)
+            start_time += self.un_binned_rate * ((bin_mode / 2.0) - 0.5)
+            self._ephemeris_start_time = start_time
+        return self._ephemeris_start_time
+
+    @property
+    def exposure_duration(self):
+        """
+        Returns
+        -------
+        : float
+          Exposure duration in seconds
+        """
+        if not hasattr(self, "_exposure_duration"):
+            self._exposure_duration = self.un_binned_rate * self._bin_mode
+        return self._exposure_duration
+
+    @property
+    def ccd_ikid(self):
+        """
+        Compute the CCD NAIF IK ID using the CPMM-to-CCD lookup.
+
+        Returns
+        -------
+        : int
+          CCD NAIF IK ID
+        """
+        if not hasattr(self, "_ccd_ikid"):
+            ccd_number = hirise_ccd_lookup[self._cpmm_number]
+            self._ccd_ikid = pyspiceql.translateNameToCode(frame=f"MRO_HIRISE_CCD{ccd_number}",
+                                                           mission=self.spiceql_mission,
+                                                           searchKernels=self.search_kernels,
+                                                           useWeb=self.use_web)[0]
+        return self._ccd_ikid
+
+    @property
+    def sensor_frame_id(self):
+        """
+        Returns
+        -------
+        : int
+          Hard-coded sensor frame ID (from ISIS HiRise camera model)
+        """
+        return -74690
+
+    @property
+    def detector_center_line(self):
+        """
+        Returns the center detector line. This mirrors
+        MroHiRiseIsisLabelNaifSpiceDriver: it is a placeholder of 0 that keeps
+        the ISD usable within ISIS but is not the true USGSCSM boresight line.
+        ISIS itself sets the detector origin/offset in the HiRise camera model
+        rather than reading these from the ISD.
+
+        Returns
+        -------
+        : float
+          Detector line of the principal point
+        """
+        return 0
+
+    @property
+    def detector_center_sample(self):
+        """
+        Returns the center detector sample. This mirrors
+        MroHiRiseIsisLabelNaifSpiceDriver: it is a placeholder of 0 that keeps
+        the ISD usable within ISIS but is not the true USGSCSM boresight sample.
+        ISIS itself sets the detector origin/offset in the HiRise camera model
+        rather than reading these from the ISD.
+
+        Returns
+        -------
+        : float
+          Detector sample of the principal point
+        """
+        return 0
+
+    @property
+    def naif_keywords(self):
+        """
+        Adds CCD-specific NAIF keywords to the base set.
+
+        Returns
+        -------
+        : dict
+          Combined NAIF keywords
+        """
+        if not hasattr(self, "_mrohirise_naif_keywords"):
+            self._mrohirise_naif_keywords = {
+                **super().naif_keywords,
+                **pyspiceql.findMissionKeywords(key=f"*{self.ccd_ikid}*",
+                                                mission=self.spiceql_mission,
+                                                searchKernels=self.search_kernels,
+                                                useWeb=self.use_web)[0],
+            }
+        return self._mrohirise_naif_keywords
+
+    @property
+    def sensor_model_version(self):
+        """
+        Returns
+        -------
+        : int
+          ISIS sensor model version
+        """
+        return 1
+
+
 class MroHiRiseIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, RadialDistortion, Driver):
     """
     Driver for reading HiRise ISIS labels.
@@ -601,7 +879,11 @@ class MroHiRiseIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, Radia
 
             # The -74999 is the code to select the transformation from
             # high-precision MRO SCLK to ET
-            start_time = self.spiceql_call("strSclkToEt", {"frameCode": -74999, "sclk": self.spacecraft_clock_start_count, "mission": self.spiceql_mission})
+            start_time = pyspiceql.strSclkToEt(frameCode=-74999, 
+                                               sclk=self.spacecraft_clock_start_count, 
+                                               mission=self.spiceql_mission, 
+                                               searchKernels=self.search_kernels,
+                                               useWeb=self.use_web)[0]
             # Adjust the start time so that it is the effective time for
             # the first line in the image file.  Note that on 2006-03-29, this
             # time is now subtracted as opposed to adding it.  The computed start
@@ -641,7 +923,7 @@ class MroHiRiseIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, Radia
         """
         if not hasattr(self, "_ccd_ikid"):
             ccd_number = hirise_ccd_lookup[self.label["IsisCube"]["Instrument"]["CpmmNumber"]]
-            self._ccd_ikid = self.spiceql_call("translateNameToCode", {"frame": "MRO_HIRISE_CCD{}".format(ccd_number), "mission": self.spiceql_mission})
+            self._ccd_ikid = pyspiceql.translateNameToCode(frame="MRO_HIRISE_CCD{}".format(ccd_number), mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ccd_ikid
 
     @property
@@ -696,7 +978,8 @@ class MroHiRiseIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, Radia
           Dictionary of keywords and values that ISIS creates and attaches to the label
         """
         if not hasattr(self, "_mrohirise_naif_keywords"):
-            _mrohirise_naif_keywords = {**super().naif_keywords, **self.spiceql_call("findMissionKeywords", {"key": f"*{self.ccd_ikid}*", "mission": self.spiceql_mission})}
+            hirise_keywords = pyspiceql.findMissionKeywords(key=f"*{self.ccd_ikid}*", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
+            _mrohirise_naif_keywords = {**super().naif_keywords, **hirise_keywords}
         return _mrohirise_naif_keywords
 
 
@@ -758,7 +1041,11 @@ class MroCrismIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDist
           Starting ephemeris time of the image
         """
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("strSclkToEt", {"frameCode": -74999, "sclk": self.spacecraft_clock_start_count, "mission": self.spiceql_mission})
+            self._ephemeris_start_time = pyspiceql.strSclkToEt(frameCode=-74999, 
+                                                               sclk=self.spacecraft_clock_start_count, 
+                                                               mission=self.spiceql_mission, 
+                                                               searchKernels=self.search_kernels,
+                                                               useWeb=self.use_web)[0]
         return self._ephemeris_start_time
 
     @property
@@ -776,7 +1063,11 @@ class MroCrismIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDist
           Ephemeris stop time of the image
         """
         if not hasattr(self, "_ephemeris_stop_time"):
-            self._ephemeris_stop_time = self.spiceql_call("strSclkToEt", {"frameCode": -74999, "sclk": self.spacecraft_clock_stop_count, "mission": self.spiceql_mission})
+            self._ephemeris_stop_time = pyspiceql.strSclkToEt(frameCode=-74999, 
+                                                              sclk=self.spacecraft_clock_stop_count,
+                                                              mission=self.spiceql_mission,
+                                                              searchKernels=self.search_kernels,
+                                                              useWeb=self.use_web)[0]
         return self._ephemeris_stop_time
 
     @property

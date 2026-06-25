@@ -10,6 +10,7 @@ from ale import util
 from ale.drivers import sort_drivers
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice
+from ale.formatters.formatter import to_isd
 
 from ale.drivers.mess_drivers import MessengerMdisPds3NaifSpiceDriver
 
@@ -18,6 +19,14 @@ from conftest import get_image_label, get_image_kernels, convert_kernels, get_is
 @pytest.fixture()
 def mess_kernels():
     kernels = get_image_kernels('EN1072174528M')
+    updated_kernels, binary_kernels = convert_kernels(kernels)
+    yield updated_kernels
+    for kern in binary_kernels:
+        os.remove(kern)
+
+@pytest.fixture()
+def mro_kernels():
+    kernels = get_image_kernels('B10_013341_1010_XN_79S172W')
     updated_kernels, binary_kernels = convert_kernels(kernels)
     yield updated_kernels
     for kern in binary_kernels:
@@ -42,7 +51,7 @@ def test_mess_load(class_truth, return_val, mess_kernels):
         assert usgscsm_isd_obj['name_sensor'] == 'MERCURY DUAL IMAGING SYSTEM NARROW ANGLE CAMERA'
         assert usgscsm_isd_obj['name_model'] == 'USGS_ASTRO_FRAME_SENSOR_MODEL'
     except Exception as load_failure:
-        assert str(load_failure) == "No Such Driver for Label"
+        assert str(load_failure) == "No viable Driver for Label."
         assert return_val is False
 
 def test_mess_load_gtiff(mess_kernels):
@@ -74,7 +83,11 @@ def test_load_invalid_spice_root(monkeypatch):
     with pytest.raises(Exception):
         ale.load(label_file)
 
-
+def test_load_driver(mro_kernels):
+    label_file = get_image_label('B10_013341_1010_XN_79S172W')
+    my_driver = ale.drivers.get_driver_from_label(label_file, {'kernels': mro_kernels})
+    assert my_driver == ale.drivers.mro_drivers.MroCtxPds3LabelNaifSpiceDriver
+    
 def test_load_mes_from_metakernels(tmpdir, monkeypatch, mess_kernels):
     with patch.dict('os.environ', {'ALESPICEROOT': str(tmpdir)}):
         # reload module to repopulate ale.spice_root
@@ -91,7 +104,7 @@ def test_load_mes_from_metakernels(tmpdir, monkeypatch, mess_kernels):
             mk_file.write(mk_str)
 
 
-        usgscsm_isd_obj = ale.load(label_file, verbose=False)
+        usgscsm_isd_obj = ale.load(label_file, verbose=True)
 
     assert usgscsm_isd_obj['name_platform'] == 'MESSENGER'
     assert usgscsm_isd_obj['name_sensor'] == 'MERCURY DUAL IMAGING SYSTEM NARROW ANGLE CAMERA'

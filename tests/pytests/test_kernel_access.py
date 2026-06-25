@@ -1,15 +1,21 @@
 from importlib import reload
+import os
 from os.path import join
+from pathlib import Path
 
 import pytest
 import tempfile
 import pvl
 from unittest.mock import MagicMock, patch
 
+from conftest import get_image_label, get_image_kernels, convert_kernels
+
 from collections import OrderedDict
 
 import ale
 from ale import kernel_access
+from ale.drivers.mro_drivers import MroCtxIsisLabelNaifSpiceDriver
+from ale import spice_root
 
 @pytest.fixture
 def cube_kernels():
@@ -45,6 +51,25 @@ def pvl_four_group():
       Messenger    = $ISIS3DATA/messenger
     EndGroup
     """
+
+def test_get_kernels_from_metakernel():
+
+    mro_test_mk = join(Path(__file__).parent.absolute(), 'data', 'kernel_access', 'mro_test_mk.tm')
+    mro_test_path = join(Path(__file__).parent.absolute(), 'data', 'B10_013341_1010_XN_79S172W')
+
+    kernels_from_mk = kernel_access.get_kernels_from_metakernel(mro_test_mk, mro_test_path)
+
+    mro_test_kernels = ['B10_013341_1010_XN_79S172W_0.xsp',
+                        'B10_013341_1010_XN_79S172W_1.xsp',
+                        'mro_ctx_v11.ti',
+                        'mro_sc_psp_090526_090601_0_sliced_-74000.xc',
+                        'mro_sc_psp_090526_090601_1_sliced_-74000.xc',
+                        'mro_sclkscet_00082_65536.tsc']
+    
+    for index, kernel in enumerate(mro_test_kernels):
+        mro_test_kernels[index] = join(mro_test_path, kernel)
+
+    assert kernels_from_mk == mro_test_kernels
 
 def test_find_kernels(cube_kernels, tmpdir):
     ck_db = """
@@ -198,6 +223,56 @@ def test_get_metakernels(tmpdir, search_kwargs, expected):
         r['path'] = str(tmpdir.join(r['path']))
 
     assert search_result == expected
+
+def test_get_metakernels_year_only_filename(tmpdir):
+    """A metakernel filename with only mission_<year> (no version segment),
+    e.g. 'lro_2013.tm', should parse as year='2013', version='N/A' so that
+    filtering by year picks the right file. Previously the parser inserted
+    'N/A' as the year and treated '2013' as the version, which caused
+    versions='latest' to pick lro_2018.tm over lro_2013.tm regardless of
+    cube date.
+    """
+    tmpdir.mkdir('lro-b-v01')
+    open(tmpdir.join('lro-b-v01', 'lro_2013.tm'), 'w').close()
+    open(tmpdir.join('lro-b-v01', 'lro_2018.tm'), 'w').close()
+
+    res_2013 = kernel_access.get_metakernels(
+        str(tmpdir), missions='lro', years=2013, versions='latest')
+    assert res_2013['count'] == 1
+    assert res_2013['data'][0]['path'].endswith('lro_2013.tm')
+    assert res_2013['data'][0]['year'] == '2013'
+    assert res_2013['data'][0]['version'] == 'N/A'
+
+    res_2018 = kernel_access.get_metakernels(
+        str(tmpdir), missions='lro', years=2018, versions='latest')
+    assert res_2018['count'] == 1
+    assert res_2018['data'][0]['path'].endswith('lro_2018.tm')
+
+def test_get_metakernels_version_only_filename(tmpdir):
+    """A metakernel filename with mission_<version> (no year segment), e.g.
+    'ch2_v01.tm' or 'msl_v01.tm', should keep parsing as year='N/A',
+    version='v01' so it matches any-year filter. The fix that made
+    'lro_2013.tm' work must preserve this legacy behavior for files whose
+    second segment isn't a 4-digit year.
+    """
+    tmpdir.mkdir('ch2-b-v01')
+    open(tmpdir.join('ch2-b-v01', 'ch2_v01.tm'), 'w').close()
+    tmpdir.mkdir('msl-b-v01')
+    open(tmpdir.join('msl-b-v01', 'msl_v01.tm'), 'w').close()
+
+    res_ch2 = kernel_access.get_metakernels(
+        str(tmpdir), missions='ch2', years=2023, versions='latest')
+    assert res_ch2['count'] == 1
+    assert res_ch2['data'][0]['path'].endswith('ch2_v01.tm')
+    assert res_ch2['data'][0]['year'] == 'N/A'
+    assert res_ch2['data'][0]['version'] == 'v01'
+
+    res_msl = kernel_access.get_metakernels(
+        str(tmpdir), missions='msl', years=2014, versions='latest')
+    assert res_msl['count'] == 1
+    assert res_msl['data'][0]['path'].endswith('msl_v01.tm')
+    assert res_msl['data'][0]['year'] == 'N/A'
+    assert res_msl['data'][0]['version'] == 'v01'
 
 @pytest.mark.parametrize('search_kwargs, expected',
     [({'years':'2009', 'versions':'v01'}, {'count':0, 'data':[]})])
