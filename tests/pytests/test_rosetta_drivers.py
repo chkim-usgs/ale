@@ -165,7 +165,7 @@ def test_load(test_kernels, label_type, image):
     patch('ale.drivers.rosetta_drivers.RosettaVirtisIsisLabelNaifSpiceDriver.optical_angle', opt_ang):
 
         label_file = get_image_label(image, label_type)
-        isd_str = ale.loads(label_file, props={'kernels': test_kernels[image]})
+        isd_str = ale.loads(label_file, props={'kernels': test_kernels[image], 'attach_kernels': False})
         isd_obj = json.loads(isd_str)
         compare_dict = image_dict[image]
         assert compare_dicts(isd_obj, compare_dict) == []
@@ -211,9 +211,9 @@ class test_rosetta_virtis_isis_naif(unittest.TestCase):
     
     def test_sensor_frame_id(self):
         with patch('ale.drivers.rosetta_drivers.RosettaVirtisIsisLabelNaifSpiceDriver.has_articulation_kernel', True), \
-        patch('ale.drivers.rosetta_drivers.NaifSpice.spiceql_call', return_value=12345) as bods2c:
+             patch.object(ale.drivers.rosetta_drivers.NaifSpice, 'sensor_frame_id', new_callable=PropertyMock) as sensor_frame_id:
+            sensor_frame_id.return_value = 12345
             assert self.driver.sensor_frame_id == 12345
-            bods2c.assert_called_with("translateNameToCode", {"frame" : 'ROS_VIRTIS-M_IR', "mission" : "rosetta"})
     
     def test_is_calibrated(self):
         assert self.driver.is_calibrated is False

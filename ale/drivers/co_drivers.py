@@ -2,12 +2,13 @@ import os
 from glob import glob
 
 import numpy as np
-
-import pvl
 from pyspiceql import pyspiceql
-from ale.base import Driver
+import pvl
+
+from ale.base import Driver, WrongInstrumentException
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice
+from ale.base.data_isis import get_naif_keyword
 from ale.base.label_pds3 import Pds3Label
 from ale.base.label_isis import IsisLabel
 from ale.base.type_distortion import RadialDistortion, NoDistortion
@@ -141,7 +142,10 @@ class CassiniIssIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, RadialDis
         : str
           instrument id
         """
-        return iss_id_lookup[super().instrument_id]
+        try:
+            return iss_id_lookup[super().instrument_id]
+        except KeyError:
+            raise WrongInstrumentException(f"Unknown instrument id: {super().instrument_id}.")
 
     @property
     def spacecraft_name(self):
@@ -179,7 +183,7 @@ class CassiniIssIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, RadialDis
           start time
         """
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+            self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), useWeb=self.use_web)
         return self._ephemeris_start_time
 
     @property
@@ -291,7 +295,7 @@ class CassiniIssIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, RadialDis
             try:
                 # Call frinfo to check if the ISIS iak has been loaded with the
                 # additional reference frame. Otherwise, Fail and add it manually
-                _ = self.spiceql_call("getFrameInfo", {"frame": self.sensor_frame_id, "mission": self.spiceql_mission})
+                _ = pyspiceql.getFrameInfo(frame=self.sensor_frame_id, mission=self.spiceql_mission, useWeb=self.use_web)
                 self._frame_chain = super().frame_chain
             except Exception as e:
                 nadir = self._props.get('nadir', False)
@@ -320,7 +324,10 @@ class CassiniVimsIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoD
     @property
     def vims_channel(self):
         if not hasattr(self, '_vims_channel'):
-            self._vims_channel = self.label['IsisCube']["Instrument"]["Channel"]
+            try:
+                self._vims_channel = self.label['IsisCube']["Instrument"]["Channel"]
+            except KeyError:
+                raise WrongInstrumentException(f"Missing Channel keyword. Expected Channel in ISIS label.")
         return self._vims_channel
 
     @property
@@ -337,7 +344,10 @@ class CassiniVimsIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoD
         : str
           instrument id
         """
-        return vims_id_lookup[super().instrument_id + "_" + self.vims_channel]
+        key = super().instrument_id + "_" + self.vims_channel
+        if key not in vims_id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return vims_id_lookup[key]
 
     @property
     def sensor_name(self):
@@ -375,11 +385,14 @@ class CassiniVimsIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoD
             exposure_duration = self.label['IsisCube']['Instrument']['ExposureDuration']
 
             for i in exposure_duration:
-                if i.units == "VIS":
-                    exposure_duration = i
+                if isinstance(i, pvl.collections.Quantity):
+                    if i.units == "VIS":
+                        exposure_duration = i.value
+                elif isinstance(i, dict):
+                    if i["unit"] == "VIS":
+                        exposure_duration = i["value"]
 
-            exposure_duration = exposure_duration.value * 0.001
-            return exposure_duration
+            return exposure_duration * 0.001
         else:
             return self.line_exposure_duration
 
@@ -408,10 +421,10 @@ class CassiniVimsIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoD
         time = str(instrument_group["NativeStartTime"])
         int_time, decimal_time = str(time).split(".")
 
-        ephemeris_time = self.spiceql_call("strSclkToEt", {"frameCode" : self.spacecraft_id, "sclk" : int_time, "mission" : self.spiceql_mission})
+        ephemeris_time = pyspiceql.strSclkToEt(frameCode=self.spacecraft_id, sclk=int_time, mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         ephemeris_time += float(decimal_time) / 15959.0
 
-        ir_exp = float(instrument_group["ExposureDuration"][0]) * 1.01725 / 1000.0;
+        ir_exp = float(instrument_group["ExposureDuration"][0]) * 1.01725 / 1000.0
         vis_exp = float(instrument_group["ExposureDuration"][1]) / 1000.0
 
         interline_delay = (float(instrument_group["InterlineDelayDuration"]) * 1.01725) / 1000.0
@@ -465,8 +478,15 @@ class CassiniVimsIsisLabelIsisSpiceDriver(LineScanner, IsisLabel, IsisSpice, NoD
           instrument id
         """
 
-        image_type = self.label['IsisCube']["Instrument"]["Channel"]
-        return vims_id_lookup[super().instrument_id + "_" + image_type]
+        try:
+            image_type = self.label['IsisCube']["Instrument"]["Channel"]
+        except KeyError:
+            raise WrongInstrumentException(f"Unknown instrument id: {super().instrument_id}.")
+        
+        key = super().instrument_id + "_" + image_type
+        if key not in vims_id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return vims_id_lookup[key]
 
     @property
     def sensor_name(self):
@@ -502,13 +522,15 @@ class CassiniVimsIsisLabelIsisSpiceDriver(LineScanner, IsisLabel, IsisSpice, NoD
         """
         if 'ExposureDuration' in self.label['IsisCube']['Instrument']:
             exposure_duration = self.label['IsisCube']['Instrument']['ExposureDuration']
-
             for i in exposure_duration:
-                if i.units == "VIS":
-                    exposure_duration = i
+                if isinstance(exposure_duration, pvl.collections.Quantity):
+                    if i.units == "VIS":
+                        exposure_duration = i.value
+                elif isinstance(exposure_duration, dict):
+                    if i["unit"] == "VIS":
+                        exposure_duration = i["value"]
 
-            exposure_duration = exposure_duration.value * 0.001
-            return exposure_duration
+            return exposure_duration * 0.001
         else:
             return self.line_exposure_duration
 
@@ -533,7 +555,10 @@ class CassiniIssPds3LabelNaifSpiceDriver(Framer, Pds3Label, NaifSpice, RadialDis
         : str
           instrument id
         """
-        return iss_id_lookup[super().instrument_id]
+        try:
+            return iss_id_lookup[super().instrument_id]
+        except KeyError:
+            raise WrongInstrumentException(f"Unknown instrument id: {super().instrument_id}.")
 
     @property
     def focal_epsilon(self):
@@ -546,7 +571,7 @@ class CassiniIssPds3LabelNaifSpiceDriver(Framer, Pds3Label, NaifSpice, RadialDis
         : float
           focal epsilon
         """
-        return float(self.naif_keywords['INS{}_FL_UNCERTAINTY'.format(self.ikid)][0])
+        return float(self.naif_keywords['INS{}_FL_UNCERTAINTY'.format(self.ikid)])
 
     @property
     def spacecraft_name(self):
@@ -726,7 +751,7 @@ class CassiniIssPds3LabelNaifSpiceDriver(Framer, Pds3Label, NaifSpice, RadialDis
             try:
                 # Call frinfo to check if the ISIS iak has been loaded with the
                 # additional reference frame. Otherwise, Fail and add it manually
-                _ = self.spiceql_call("getFrameInfo", {"frame": self.sensor_frame_id, "mission": self.spiceql_mission})
+                _ = pyspiceql.getFrameInfo(frame=self.sensor_frame_id, mission=self.spiceql_mission, useWeb=self.use_web)
                 self._frame_chain = super().frame_chain
             except Exception as e:
                 nadir = self._props.get('nadir', False)
@@ -758,7 +783,10 @@ class CassiniIssIsisLabelIsisSpiceDriver(Framer, IsisLabel, IsisSpice, NoDistort
         : str
           ID of the sensor
         """
-        return iss_id_lookup[super().instrument_id]
+        try:
+            return iss_id_lookup[super().instrument_id]
+        except KeyError:
+            raise WrongInstrumentException(f"Unknown instrument id: {super().instrument_id}.")
 
     @property
     def sensor_name(self):
@@ -802,4 +830,4 @@ class CassiniIssIsisLabelIsisSpiceDriver(Framer, IsisLabel, IsisSpice, NoDistort
             The focal length in millimeters
         """
         filters = self.label["IsisCube"]["BandBin"]['FilterName'].split("/")
-        return self.naif_keywords.get('INS{}_{}_{}_FOCAL_LENGTH'.format(self.ikid, filters[0], filters[1]), None)
+        return get_naif_keyword(self, 'focal_length', 'INS{}_{}_{}_FOCAL_LENGTH'.format(self.ikid, filters[0], filters[1]))

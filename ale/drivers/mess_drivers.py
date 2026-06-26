@@ -1,7 +1,8 @@
 import numpy as np
-
 from pyspiceql import pyspiceql
-from ale.base import Driver
+import pvl
+
+from ale.base import Driver, WrongInstrumentException
 from ale.base.data_naif import NaifSpice
 from ale.base.label_pds3 import Pds3Label
 from ale.base.label_isis import IsisLabel
@@ -66,7 +67,10 @@ class MessengerMdisIsisLabelIsisSpiceDriver(Framer, IsisLabel, IsisSpice, NoDist
         : str
           instrument id
         """
-        return ID_LOOKUP[super().instrument_id]
+        key = super().instrument_id
+        if key not in ID_LOOKUP:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return ID_LOOKUP[key]
 
 class MessengerMdisPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortion, Driver):
     """
@@ -124,7 +128,10 @@ class MessengerMdisPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, NoDistortio
         : str
           instrument id
         """
-        return ID_LOOKUP[super().instrument_id]
+        key = super().instrument_id
+        if key not in ID_LOOKUP:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return ID_LOOKUP[key]
 
     @property
     def sampling_factor(self):
@@ -283,7 +290,10 @@ class MessengerMdisIsisLabelNaifSpiceDriver(IsisLabel, NaifSpice, Framer, NoDist
         : str
           instrument id
         """
-        return ID_LOOKUP[super().instrument_id]
+        key = super().instrument_id
+        if key not in ID_LOOKUP:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return ID_LOOKUP[key]
 
     @property
     def usgscsm_distortion_model(self):
@@ -347,7 +357,11 @@ class MessengerMdisIsisLabelNaifSpiceDriver(IsisLabel, NaifSpice, Framer, NoDist
           f_t = np.poly1d(coeffs[::-1])
 
           # eval at the focal_plane_temperature
-          self._focal_length = f_t(self.label['IsisCube']['Instrument']['FocalPlaneTemperature'].value)
+          focal_temp = self.label['IsisCube']['Instrument']['FocalPlaneTemperature']
+          if isinstance(focal_temp, pvl.collections.Quantity):
+            self._focal_length = f_t(focal_temp.value)
+          elif isinstance(focal_temp, dict):
+            self._focal_length = f_t(focal_temp["value"])
         return self._focal_length
 
     @property

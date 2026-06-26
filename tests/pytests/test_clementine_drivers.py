@@ -20,7 +20,7 @@ def test_uvvis_kernels():
 
 def test_uvvis_load(test_uvvis_kernels):
     label_file = get_image_label('LUA3107H.161', 'isis3')
-    isd_str = ale.loads(label_file, props={'kernels': test_uvvis_kernels, 'exact_ck_times': False})
+    isd_str = ale.loads(label_file, props={'kernels': test_uvvis_kernels, 'exact_ck_times': False, 'attach_kernels': False})
     isd_obj = json.loads(isd_str)
     compare_isd = get_isd('clem_uvvis')
     assert compare_dicts(isd_obj, compare_isd) == []
@@ -35,7 +35,7 @@ def test_hires_kernels():
 
 def test_hires_load(test_hires_kernels):
     label_file = get_image_label('LHA0775Q.001', 'isis3')
-    isd_str = ale.loads(label_file, props={'kernels': test_hires_kernels, 'exact_ck_times': False}, verbose=True)
+    isd_str = ale.loads(label_file, props={'kernels': test_hires_kernels, 'exact_ck_times': False, 'attach_kernels': False}, verbose=True)
     isd_obj = json.loads(isd_str)
     compare_isd = get_isd('clem_hires')
     assert compare_dicts(isd_obj, compare_isd) == []
@@ -50,7 +50,7 @@ def test_nir_kernels():
 
 def test_nir_load(test_nir_kernels):
     label_file = get_image_label('LNB4653M.093', 'isis3')
-    isd_str = ale.loads(label_file, props={'kernels': test_nir_kernels, 'exact_ck_times': False}, verbose=True)
+    isd_str = ale.loads(label_file, props={'kernels': test_nir_kernels, 'exact_ck_times': False, 'attach_kernels': False}, verbose=True)
     isd_obj = json.loads(isd_str)
     compare_isd = get_isd('clem_nir')
     assert compare_dicts(isd_obj, compare_isd) == []
@@ -65,7 +65,7 @@ def test_lwir_kernels():
 
 def test_lwir_load(test_lwir_kernels):
     label_file = get_image_label('LLA5391Q.209', 'isis3')
-    isd_str = ale.loads(label_file, props={'kernels': test_lwir_kernels, 'exact_ck_times': False}, verbose=True)
+    isd_str = ale.loads(label_file, props={'kernels': test_lwir_kernels, 'exact_ck_times': False, 'attach_kernels': False}, verbose=True)
     isd_obj = json.loads(isd_str)
     compare_isd = get_isd('clem_lwir')
     assert compare_dicts(isd_obj, compare_isd) == []
@@ -88,18 +88,18 @@ class test_uvvis_isis_naif(unittest.TestCase):
         assert self.driver.spacecraft_name == "CLEMENTINE_1"
 
     def test_ephemeris_start_time(self):
-        with patch('ale.spiceql_access.spiceql_call', side_effect=[12345]) as spiceql_call:
+        with patch('ale.drivers.clementine_drivers.pyspiceql.utcToEt', return_value=[12345]) as utcToEt:
             assert self.driver.ephemeris_start_time == 12345
-            calls = [call('utcToEt', {'utc': '1994-03-25 15:14:15.347000', 'searchKernels': False}, False)]
-            spiceql_call.assert_has_calls(calls)
-            assert spiceql_call.call_count == 1
+            calls = [call(utc='1994-03-25 15:14:15.347000', searchKernels=False, useWeb=False)]
+            utcToEt.assert_has_calls(calls)
+            assert utcToEt.call_count == 1
 
     def test_ephemeris_stop_time(self):
-        with patch('ale.spiceql_access.spiceql_call', side_effect=[12345]) as spiceql_call:
+        with patch('ale.drivers.clementine_drivers.pyspiceql.utcToEt', return_value=[12345]) as utcToEt:
             assert self.driver.ephemeris_stop_time == 12345.0090624
-            calls = [call('utcToEt', {'utc': '1994-03-25 15:14:15.347000', 'searchKernels': False}, False)]
-            spiceql_call.assert_has_calls(calls)
-            assert spiceql_call.call_count == 1
+            calls = [call(utc='1994-03-25 15:14:15.347000', searchKernels=False, useWeb=False)]
+            utcToEt.assert_has_calls(calls)
+            assert utcToEt.call_count == 1
 
 
     def test_sensor_model_version(self):
@@ -126,17 +126,18 @@ class test_hires_isis_naif(unittest.TestCase):
         assert self.driver.spacecraft_name == "CLEMENTINE_1"
 
     def test_ephemeris_start_time(self):
-        with patch('ale.spiceql_access.spiceql_call', side_effect=[12345]) as spiceql_call:
+        with patch('ale.drivers.clementine_drivers.pyspiceql.utcToEt', return_value=[12345]) as utcToEt:
             assert self.driver.ephemeris_start_time == 12345
-            calls = [call('utcToEt', {'utc': '1994-02-19 21:34:01.990000', 'searchKernels': False}, False)]
-            spiceql_call.assert_has_calls(calls)
+            calls = [call(utc='1994-02-19 21:34:01.990000', searchKernels=False, useWeb=False)]
+            utcToEt.assert_has_calls(calls)
+            assert utcToEt.call_count == 1
 
     def test_ephemeris_stop_time(self):
-        with patch('ale.spiceql_access.spiceql_call', side_effect=[12345]) as spiceql_call:
+        with patch('ale.drivers.clementine_drivers.pyspiceql.utcToEt', return_value=[12345]) as utcToEt:
             assert self.driver.ephemeris_stop_time == 12345.0005015
-            calls = [call('utcToEt', {'utc': '1994-02-19 21:34:01.990000', 'searchKernels': False}, False)]
-            spiceql_call.assert_has_calls(calls)
-            assert spiceql_call.call_count == 1
+            calls = [call(utc='1994-02-19 21:34:01.990000', searchKernels=False, useWeb=False)]
+            utcToEt.assert_has_calls(calls)
+            assert utcToEt.call_count == 1
 
     def test_sensor_model_version(self):
         assert self.driver.sensor_model_version == 1
@@ -159,17 +160,18 @@ class test_nir_isis_naif(unittest.TestCase):
         assert self.driver.spacecraft_name == "CLEMENTINE_1"
 
     def test_ephemeris_start_time(self):
-        with patch('ale.spiceql_access.spiceql_call', side_effect=[12345]) as spiceql_call:
+        with patch('ale.drivers.clementine_drivers.pyspiceql.utcToEt', return_value=[12345]) as utcToEt:
             assert self.driver.ephemeris_start_time == 12345
-            calls = [call('utcToEt', {'utc': '1994-03-11 13:22:45.332000', 'searchKernels': False}, False)]
-            spiceql_call.assert_has_calls(calls)
+            calls = [call(utc='1994-03-11 13:22:45.332000', searchKernels=False, useWeb=False)]
+            utcToEt.assert_has_calls(calls)
+            assert utcToEt.call_count == 1
 
     def test_ephemeris_stop_time(self):
-        with patch('ale.spiceql_access.spiceql_call', side_effect=[12345]) as spiceql_call:
+        with patch('ale.drivers.clementine_drivers.pyspiceql.utcToEt', return_value=[12345]) as utcToEt:
             assert self.driver.ephemeris_stop_time == 12345.011
-            calls = [call('utcToEt', {'utc': '1994-03-11 13:22:45.332000', 'searchKernels': False}, False)]
-            spiceql_call.assert_has_calls(calls)
-            assert spiceql_call.call_count == 1
+            calls = [call(utc='1994-03-11 13:22:45.332000', searchKernels=False, useWeb=False)]
+            utcToEt.assert_has_calls(calls)
+            assert utcToEt.call_count == 1
 
     def test_sensor_name(self):
         assert self.driver.sensor_name == "NIR"
@@ -201,17 +203,18 @@ class test_lwir_isis_naif(unittest.TestCase):
         assert self.driver.spacecraft_name == "CLEMENTINE_1"
 
     def test_ephemeris_start_time(self):
-        with patch('ale.spiceql_access.spiceql_call', side_effect=[12345]) as spiceql_call:
+        with patch('ale.drivers.clementine_drivers.pyspiceql.utcToEt', return_value=[12345]) as utcToEt:
             assert self.driver.ephemeris_start_time == 12345
-            calls = [call('utcToEt', {'utc': '1994-04-04 17:17:51.263000', 'searchKernels': False}, False)]
-            spiceql_call.assert_has_calls(calls)
+            calls = [call(utc='1994-04-04 17:17:51.263000', searchKernels=False, useWeb=False)]
+            utcToEt.assert_has_calls(calls)
+            assert utcToEt.call_count == 1
 
     def test_ephemeris_stop_time(self):
-        with patch('ale.spiceql_access.spiceql_call', side_effect=[12345]) as spiceql_call:
+        with patch('ale.drivers.clementine_drivers.pyspiceql.utcToEt', return_value=[12345]) as utcToEt:
             assert self.driver.ephemeris_stop_time == 12345.000144
-            calls = [call('utcToEt', {'utc': '1994-04-04 17:17:51.263000', 'searchKernels': False}, False)]
-            spiceql_call.assert_has_calls(calls)
-            assert spiceql_call.call_count == 1
+            calls = [call(utc='1994-04-04 17:17:51.263000', searchKernels=False, useWeb=False)]
+            utcToEt.assert_has_calls(calls)
+            assert utcToEt.call_count == 1
 
     def test_sensor_model_version(self):
         assert self.driver.sensor_model_version == 1

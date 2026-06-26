@@ -1,5 +1,9 @@
 import math
+
+import pyspiceql
+
 from ale.base.base import Driver
+from ale.base import WrongInstrumentException
 from ale.base.type_distortion import ThemisIrDistortion, NoDistortion
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
@@ -24,7 +28,7 @@ class OdyThemisIrIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, The
         inst_id = super().instrument_id
 
         if inst_id not in ["THEMIS_IR"]:
-            raise Exception(f"{inst_id} is not a valid THEMIS IR instrument name. Expecting THEMIS_IR")
+            raise WrongInstrumentException(f"{inst_id} is not a valid THEMIS IR instrument name. Expecting THEMIS_IR")
         return inst_id
 
     @property
@@ -111,6 +115,13 @@ class OdyThemisIrIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, The
             else:
                 # if not milliseconds, the units are probably seconds
                 offset = offset.value
+        elif isinstance(offset, dict):
+            units = offset["unit"]
+            if "ms" in units.lower():
+                offset = offset["value"] * 0.001
+            else:
+                # if not milliseconds, the units are probably seconds
+                offset = offset["value"]
 
         return og_start_time + offset
     
@@ -256,7 +267,7 @@ class OdyThemisVisIsisLabelNaifSpiceDriver(PushFrame, IsisLabel, NaifSpice, NoDi
         inst_id = super().instrument_id
 
         if inst_id not in ["THEMIS_VIS"]:
-            raise Exception(f"{inst_id} is not a valid THEMIS VIS instrument name. Expecting \"THEMIS_VIS\"")
+            raise WrongInstrumentException(f"{inst_id} is not a valid THEMIS VIS instrument name. Expecting \"THEMIS_VIS\"")
 
         return inst_id
 
@@ -311,7 +322,7 @@ class OdyThemisVisIsisLabelNaifSpiceDriver(PushFrame, IsisLabel, NaifSpice, NoDi
         clock_start_count = self.label['IsisCube']['Instrument']['SpacecraftClockCount']
 
         # ran into weird quirk that if clock count ends with a zero, str() will drop the last zero causing scs2e to return a different et.
-        og_start_time = self.spiceql_call("strSclkToEt", {"frameCode" : self.spacecraft_id, "sclk" : f'{clock_start_count:.3f}'})
+        og_start_time = pyspiceql.strSclkToEt(frameCode=self.spacecraft_id, sclk=f'{clock_start_count:.3f}', searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         
         offset = self.label["IsisCube"]["Instrument"]["SpacecraftClockOffset"]
         if isinstance(offset, pvl.collections.Quantity):
@@ -321,6 +332,13 @@ class OdyThemisVisIsisLabelNaifSpiceDriver(PushFrame, IsisLabel, NaifSpice, NoDi
             else:
                 # if not milliseconds, the units are probably seconds
                 offset = offset.value
+        elif isinstance(offset, dict):
+            units = offset["unit"]
+            if "ms" in units.lower():
+                offset = offset["value"] * 0.001
+            else:
+                # if not milliseconds, the units are probably seconds
+                offset = offset["value"]
 
         return og_start_time + offset - (self.exposure_duration / 2)
     

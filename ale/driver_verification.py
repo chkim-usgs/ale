@@ -264,8 +264,17 @@ def diff_and_describe(json1, json2, key_array):
     for key in key_array:
         json1 = json1[key]
         json2 = json2[key]
+    if json1 is None or json2 is None:
+        logger.info(f"No data available for keys {key_array}, skipping diff")
+        return
+    print(key)
     diff = json1 - json2
-    logger.info(" ".join(key_array) + "\nNum records:", len(diff), "\nMean:", np.mean(diff, axis=(0)), "\nMedian:", np.median(diff, axis=(0)), "\n")
+    logger.info(
+    f"{' '.join(key_array)}\n"
+    f"Num records: {len(diff)}\n"
+    f"Mean: {np.mean(diff, axis=0)}\n"
+    f"Median: {np.median(diff, axis=0)}"
+)
 
 def compare_isds(json1, json2):
     """
@@ -311,11 +320,11 @@ def main(image):
     run_spiceinit_isis(image_isis_path)
 
     # try ale.loads
-    isis_kerns = ale.util.generate_kernels_from_cube(image_isis_path, expand=True)
+    isis_kerns = ale.kernel_access.generate_kernels_from_cube(image_isis_path, expand=True)
     # this can be uncommented and used when the PVL loads fix PR goes in (#587)
     isis_label = pvl.load(image_isis_path)
     try:
-        ale.loads(isis_label, props={"kernels": isis_kerns}, only_naif_spice=True)
+        ale.loads(image_isis_path, props={"kernels": isis_kerns}, only_naif_spice=True)
     except:
         logger.info("No driver for such Label")
         exit
@@ -324,7 +333,7 @@ def main(image):
     run_spiceinit_ale(image_ale_path)
 
     # try ale.loads
-    ale_kerns = ale.util.generate_kernels_from_cube(image_ale_path, expand=True)
+    ale_kerns = ale.kernel_access.generate_kernels_from_cube(image_ale_path, expand=True)
     ale.loads(image_ale_path, props={"kernels": ale_kerns}, only_naif_spice=True)
     
     # Generate ISD for both ALE and ISIS

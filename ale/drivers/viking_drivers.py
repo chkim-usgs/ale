@@ -1,3 +1,5 @@
+from pyspiceql import pyspiceql
+
 from ale.base import spiceql_mission_map
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice
@@ -5,7 +7,7 @@ from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import Framer
 from ale.base.type_distortion import NoDistortion
 from ale.base.base import Driver
-from pyspiceql import pyspiceql
+from ale.base import WrongInstrumentException
 
 sensor_name_lookup = {
     "VISUAL_IMAGING_SUBSYSTEM_CAMERA_A" : "Visual Imaging Subsystem Camera A",
@@ -37,7 +39,7 @@ class VikingIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion,
         instrument_id = super().instrument_id
 
         if(instrument_id not in sensor_name_lookup):
-            raise Exception (f'Instrument ID [{instrument_id}] is wrong.')
+            raise WrongInstrumentException (f'Instrument ID [{instrument_id}] is wrong.')
 
         return instrument_id
 
@@ -107,9 +109,11 @@ class VikingIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion,
           ephemeris start time of the image
         """
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("strSclkToEt", {"frameCode": self.alt_ikid, 
-                                                                           "sclk": self.spacecraft_clock_start_count, 
-                                                                           "mission": self.spiceql_mission})
+            self._ephemeris_start_time = pyspiceql.strSclkToEt(frameCode=self.alt_ikid, 
+                                                               sclk=self.spacecraft_clock_start_count, 
+                                                               mission=self.spiceql_mission,
+                                                               searchKernels=self.search_kernels,
+                                                               useWeb=self.use_web)[0]
             if self.exposure_duration <= .420:
                 offset1 = 7.0 / 8.0 * 4.48
             else:
@@ -183,7 +187,7 @@ class VikingIsisLabelIsisSpiceDriver(Framer, IsisLabel, IsisSpice, NoDistortion,
         instrument_id = super().instrument_id
 
         if(instrument_id not in sensor_name_lookup):
-            raise Exception (f'Instrument ID [{instrument_id}] is wrong.')
+            raise WrongInstrumentException (f'Instrument ID [{instrument_id}] is wrong.')
 
         return instrument_id
 

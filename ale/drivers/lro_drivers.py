@@ -1,11 +1,12 @@
-import spiceypy as spice 
-
 import numpy as np
-
+import spiceypy as spice
 from pyspiceql import pyspiceql
-from ale.base import Driver
+import pvl
+
+from ale.base import Driver, WrongInstrumentException
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice
+from ale.base.data_isis import get_naif_keyword
 from ale.base.label_pds3 import Pds3Label
 from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import LineScanner, Radar, PushFrame
@@ -40,6 +41,7 @@ class LroLrocNacPds3LabelNaifSpiceDriver(LineScanner, NaifSpice, Pds3Label, Driv
             return "LRO_LROCNACL"
         elif instrument == "LROC" and frame_id == "RIGHT":
             return "LRO_LROCNACR"
+        raise WrongInstrumentException(f"Unknown LRO instrument/frame combination: {instrument}/{frame_id}.")
 
     @property
     def spacecraft_name(self):
@@ -159,9 +161,11 @@ class LroLrocNacPds3LabelNaifSpiceDriver(LineScanner, NaifSpice, Pds3Label, Driv
           Starting ephemeris time of the image
         """
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("strSclkToEt", {"frameCode": self.spacecraft_id, 
-                                                                           "sclk": self.label['LRO:SPACECRAFT_CLOCK_PREROLL_COUNT'], 
-                                                                           "mission": self.spiceql_mission})
+            self._ephemeris_start_time = pyspiceql.strSclkToEt(frameCode=self.spacecraft_id, 
+                                                               sclk=self.label['LRO:SPACECRAFT_CLOCK_PREROLL_COUNT'], 
+                                                               mission=self.spiceql_mission,
+                                                               searchKernels=self.search_kernels,
+                                                               useWeb=self.use_web)[0]
             self._ephemeris_start_time += self.constant_time_offset + self.additional_preroll * self.exposure_duration
         return self._ephemeris_start_time
 
@@ -269,14 +273,16 @@ class LroLrocNacPds3LabelNaifSpiceDriver(LineScanner, NaifSpice, Pds3Label, Driv
         """
         if not hasattr(self, "_spacecraft_direction"):
           frame_chain = self.frame_chain
-          lro_bus_id = self.spiceql_call("translateNameToCode", {'frame': 'LRO_SC_BUS', 'mission': self.spiceql_mission})
+          lro_bus_id = pyspiceql.translateNameToCode(frame='LRO_SC_BUS', mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
           time = self.ephemeris_start_time
-          lt_states = self.spiceql_call("getTargetStates", {'ets': [time], 
-                                                           'target': self.spacecraft_name, 
-                                                           'observer': self.target_name, 
-                                                           'frame': 'J2000', 
-                                                           'abcorr': 'None',
-                                                           'mission': self.spiceql_mission})
+          lt_states = pyspiceql.getTargetStates(ets=[time], 
+                                                target=self.spacecraft_name, 
+                                                observer=self.target_name, 
+                                                frame='J2000', 
+                                                abcorr='None',
+                                                mission=self.spiceql_mission,
+                                                searchKernels=self.search_kernels,
+                                                useWeb=self.use_web)[0]
           velocity = lt_states[0][3:6]
           rotation = frame_chain.compute_rotation(1, lro_bus_id)
           rotated_velocity = spice.mxv(rotation._rots.as_matrix()[0], velocity)
@@ -302,7 +308,10 @@ class LroLrocNacIsisLabelNaifSpiceDriver(LineScanner, NaifSpice, IsisLabel, Driv
             "NACR": "LRO_LROCNACR"
         }
 
-        return id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
     @property
     def sensor_model_version(self):
@@ -390,9 +399,11 @@ class LroLrocNacIsisLabelNaifSpiceDriver(LineScanner, NaifSpice, IsisLabel, Driv
           Starting ephemeris time of the image
         """
         if not hasattr(self, "_ephemeris_start_time"):
-          self._ephemeris_start_time = self.spiceql_call("strSclkToEt", {"frameCode": self.spacecraft_id, 
-                                                                "sclk": self.label['IsisCube']['Instrument']['SpacecraftClockPrerollCount'], 
-                                                                "mission": self.spiceql_mission})
+          self._ephemeris_start_time = pyspiceql.strSclkToEt(frameCode=self.spacecraft_id, 
+                                                             sclk=self.label['IsisCube']['Instrument']['SpacecraftClockPrerollCount'], 
+                                                             mission=self.spiceql_mission,
+                                                             searchKernels=self.search_kernels,
+                                                             useWeb=self.use_web)[0]
           self._ephemeris_start_time += self.constant_time_offset + self.additional_preroll * self.exposure_duration
         return self._ephemeris_start_time
 
@@ -513,14 +524,16 @@ class LroLrocNacIsisLabelNaifSpiceDriver(LineScanner, NaifSpice, IsisLabel, Driv
         """
         if not hasattr(self, "_spacecraft_direction"):
           frame_chain = self.frame_chain
-          lro_bus_id = self.spiceql_call("translateNameToCode", {'frame': 'LRO_SC_BUS', 'mission': self.spiceql_mission})
+          lro_bus_id = pyspiceql.translateNameToCode(frame='LRO_SC_BUS', mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
           time = self.ephemeris_start_time
-          lt_states = self.spiceql_call("getTargetStates", {'ets': [time], 
-                                                           'target': self.spacecraft_name, 
-                                                           'observer': self.target_name, 
-                                                           'frame': 'J2000', 
-                                                           'abcorr': 'None',
-                                                           'mission': self.spiceql_mission})
+          lt_states = pyspiceql.getTargetStates(ets=[time], 
+                                                target=self.spacecraft_name, 
+                                                observer=self.target_name, 
+                                                frame='J2000', 
+                                                abcorr='None',
+                                                mission=self.spiceql_mission,
+                                                searchKernels=self.search_kernels,
+                                                useWeb=self.use_web)[0]
           velocity = lt_states[0][3:6]
           rotation = frame_chain.compute_rotation(1, lro_bus_id)
           rotated_velocity = spice.mxv(rotation._rots.as_matrix()[0], velocity)
@@ -547,7 +560,10 @@ class LroLrocNacIsisLabelIsisSpiceDriver(LineScanner, IsisSpice, IsisLabel, Driv
             "NACR": "LRO_LROCNACR"
         }
 
-        return id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
     @property
     def sensor_model_version(self):
@@ -588,11 +604,7 @@ class LroLrocNacIsisLabelIsisSpiceDriver(LineScanner, IsisSpice, IsisLabel, Driv
         : list
           Radial distortion coefficients. There is only one coefficient for LROC NAC l/r
         """
-        key = 'INS{}_OD_K'.format(self.ikid)
-        ans = self.naif_keywords.get(key, None)
-        if ans is None:
-            raise Exception('Could not parse the distortion model coefficients using key: ' + key)
-        return [ans]
+        return get_naif_keyword(self, 'odtk', 'INS{}_OD_K'.format(self.ikid))
 
     @property
     def detector_center_sample(self):
@@ -742,7 +754,10 @@ class LroMiniRfIsisLabelNaifSpiceDriver(Radar, NaifSpice, IsisLabel, Driver):
             "MRFLRO": "LRO_MINIRF"
         }
 
-        return id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
     @property
     def wavelength(self):
@@ -756,7 +771,11 @@ class LroMiniRfIsisLabelNaifSpiceDriver(Radar, NaifSpice, IsisLabel, Driver):
         """
 
         # Get float value of frequency in GHz
-        frequency = self.label['IsisCube']['Instrument']['Frequency'].value
+        frequency = self.label['IsisCube']['Instrument']['Frequency']
+        if isinstance(frequency, pvl.collections.Quantity):
+            frequency = frequency.value
+        elif isinstance(frequency, dict):
+            frequency = frequency["value"]
         #wavelength = spice.clight() / frequency / 1000.0
         wavelength = 299792.458 / frequency / 1000.0
         return wavelength
@@ -817,7 +836,7 @@ class LroMiniRfIsisLabelNaifSpiceDriver(Radar, NaifSpice, IsisLabel, Driver):
         """
         if not hasattr(self, "_range_conversion_times"):
           range_coefficients_utc = self.label['IsisCube']['Instrument']['RangeCoefficientSet']
-          self._range_conversion_times = [self.spiceql_call("utcToEt", {"utc": elt[0]}) for elt in range_coefficients_utc]
+          self._range_conversion_times = [pyspiceql.utcToEt(utc=elt[0], searchKernels=self.search_kernels, useWeb=self.use_web)[0] for elt in range_coefficients_utc]
         return self._range_conversion_times
 
 
@@ -832,7 +851,7 @@ class LroMiniRfIsisLabelNaifSpiceDriver(Radar, NaifSpice, IsisLabel, Driver):
           start time
         """
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+            self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
             self._ephemeris_start_time -= self.line_exposure_duration
         return self._ephemeris_start_time
 
@@ -920,7 +939,10 @@ class LroLrocWacIsisLabelIsisSpiceDriver(PushFrame, IsisLabel, IsisSpice, Radial
         "WAC-UV" : "LRO_LROCWAC_UV",
         "WAC-VIS" : "LRO_LROCWAC_VIS"
         }
-        return id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
     @property
     def sensor_name(self):
@@ -988,13 +1010,9 @@ class LroLrocWacIsisLabelIsisSpiceDriver(PushFrame, IsisLabel, IsisSpice, Radial
         : list
           Radial distortion coefficients.
         """
-        key = 'INS{}_OD_K'.format(self.fikid)
-        ans = self.naif_keywords.get(key, None)
-        if ans is None:
-            raise Exception('Could not parse the distortion model coefficients using key: ' + key)
-
-        ans = [x * -1 for x in ans]
-        return ans
+        val = get_naif_keyword(self, 'odtk', 'INS{}_OD_K'.format(self.fikid))
+        val = [x * -1 for x in val]
+        return val
 
     @property
     def framelet_height(self):
@@ -1014,11 +1032,7 @@ class LroLrocWacIsisLabelIsisSpiceDriver(PushFrame, IsisLabel, IsisSpice, Radial
         : list<double>
         detector to focal plane x
         """
-        key = 'INS{}_TRANSX'.format(self.fikid)
-        ans = self.naif_keywords.get(key, None)
-        if ans is None:
-            raise Exception('Could not parse detector to focal plane x using key: ' + key)
-        return ans
+        return get_naif_keyword(self, 'pixel2focal_x', 'INS{}_TRANSX'.format(self.fikid));
 
     @property
     def pixel2focal_y(self):
@@ -1030,11 +1044,7 @@ class LroLrocWacIsisLabelIsisSpiceDriver(PushFrame, IsisLabel, IsisSpice, Radial
         : list<double>
         detector to focal plane y
         """
-        key = 'INS{}_TRANSY'.format(self.fikid)
-        ans = self.naif_keywords.get(key, None)
-        if ans is None:
-            raise Exception('Could not parse detector to focal plane y using key: ' + key)
-        return ans
+        return get_naif_keyword(self, 'pixel2focal_y', 'INS{}_TRANSY'.format(self.fikid))
 
     @property
     def focal_length(self):
@@ -1050,11 +1060,7 @@ class LroLrocWacIsisLabelIsisSpiceDriver(PushFrame, IsisLabel, IsisSpice, Radial
         float :
             The focal length in millimeters
         """
-        key = 'INS{}_FOCAL_LENGTH'.format(self.fikid)
-        ans = self.naif_keywords.get(key, None)
-        if ans is None:
-            raise Exception('Could not parse the focal length using key: ' + key)
-        return ans
+        return get_naif_keyword(self, 'focal_length', 'INS{}_FOCAL_LENGTH'.format(self.fikid))
 
     @property
     def detector_center_sample(self):
@@ -1068,11 +1074,7 @@ class LroLrocWacIsisLabelIsisSpiceDriver(PushFrame, IsisLabel, IsisSpice, Radial
         list :
             The center of the CCD formatted as line, sample
         """
-        key = 'INS{}_BORESIGHT_SAMPLE'.format(self.fikid)
-        ans = self.naif_keywords.get(key, None)
-        if ans is None:
-            raise Exception('Could not parse the detector center sample using key: ' + key)
-        return ans
+        return get_naif_keyword(self, 'detector_center_sample', 'INS{}_BORESIGHT_SAMPLE'.format(self.fikid))
 
     @property
     def detector_center_line(self):
@@ -1086,11 +1088,7 @@ class LroLrocWacIsisLabelIsisSpiceDriver(PushFrame, IsisLabel, IsisSpice, Radial
         list :
             The center of the CCD formatted as line, sample
         """
-        key = 'INS{}_BORESIGHT_LINE'.format(self.fikid)
-        ans = self.naif_keywords.get(key, None)
-        if ans is None:
-            raise Exception('Could not parse the detector center line using key: ' + key)
-        return ans
+        return get_naif_keyword(self, 'detector_center_sample', 'INS{}_BORESIGHT_LINE'.format(self.fikid))
 
 class LroLrocWacIsisLabelNaifSpiceDriver(PushFrame, IsisLabel, NaifSpice, RadialDistortion, Driver):
     """
@@ -1114,7 +1112,10 @@ class LroLrocWacIsisLabelNaifSpiceDriver(PushFrame, IsisLabel, NaifSpice, Radial
             "WAC-UV" : "LRO_LROCWAC_UV",
             "WAC-VIS" : "LRO_LROCWAC_VIS"
         }
-        return id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
     @property
     def sensor_model_version(self):
@@ -1177,12 +1178,12 @@ class LroLrocWacIsisLabelNaifSpiceDriver(PushFrame, IsisLabel, NaifSpice, Radial
         """
         if not hasattr(self, "_naif_keywords"):
           self._naifKeywords = {**super().naif_keywords,
-                                **self.spiceql_call("findMissionKeywords", {"key": f"*_FOCAL_LENGTH", "mission": self.spiceql_mission}),
-                                **self.spiceql_call("findMissionKeywords", {"key": f"*_BORESIGHT_SAMPLE", "mission": self.spiceql_mission}),
-                                **self.spiceql_call("findMissionKeywords", {"key": f"*_BORESIGHT_LINE", "mission": self.spiceql_mission}),
-                                **self.spiceql_call("findMissionKeywords", {"key": f"*_TRANS*", "mission": self.spiceql_mission}),
-                                **self.spiceql_call("findMissionKeywords", {"key": f"*_ITRANS*", "mission": self.spiceql_mission}),
-                                **self.spiceql_call("findMissionKeywords", {"key": f"*_OD_K", "mission": self.spiceql_mission})}
+                                **pyspiceql.findMissionKeywords(key=f"*_FOCAL_LENGTH", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0],
+                                **pyspiceql.findMissionKeywords(key=f"*_BORESIGHT_SAMPLE", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0],
+                                **pyspiceql.findMissionKeywords(key=f"*_BORESIGHT_LINE", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0],
+                                **pyspiceql.findMissionKeywords(key=f"*_TRANS*", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0],
+                                **pyspiceql.findMissionKeywords(key=f"*_ITRANS*", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0],
+                                **pyspiceql.findMissionKeywords(key=f"*_OD_K", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]}
         return self._naifKeywords
 
 

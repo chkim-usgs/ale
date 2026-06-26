@@ -1,11 +1,13 @@
 import datetime
 
+from pyspiceql import pyspiceql
+
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import Framer
 from ale.base.type_distortion import RadialDistortion
 from ale.base.base import Driver
-from pyspiceql import pyspiceql
+from ale.base import WrongInstrumentException
 
 ssi_id_lookup = {
     "SOLID STATE IMAGING SYSTEM" : "GLL_SSI_PLATFORM"
@@ -27,7 +29,10 @@ class GalileoSsiIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, RadialDis
         : str
           instrument id
         """
-        return ssi_id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in ssi_id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return ssi_id_lookup[key]
 
     @property
     def sensor_name(self):
@@ -72,7 +77,7 @@ class GalileoSsiIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, RadialDis
         : float
           start time
         """
-        return self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+        return pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
 
     @property
     def center_ephemeris_time(self):

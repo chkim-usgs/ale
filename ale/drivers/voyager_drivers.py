@@ -1,9 +1,11 @@
+import pyspiceql
 
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import Framer
 from ale.base.type_distortion import NoDistortion
 from ale.base.base import Driver
+from ale.base import WrongInstrumentException
 
 class VoyagerCameraIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion, Driver):
 
@@ -17,7 +19,12 @@ class VoyagerCameraIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDist
         "NARROW_ANGLE_CAMERA" : "ISSNA",
         "WIDE_ANGLE_CAMERA" : "ISSWA"
         }
-        return sc_lookup[super().spacecraft_name] + '_' + sensor_lookup[super().instrument_id]
+        sc = super().spacecraft_name
+        ins = super().instrument_id
+        if sc not in sc_lookup or ins not in sensor_lookup:
+            missing = sc if sc not in sc_lookup else ins
+            raise WrongInstrumentException(f"Unknown instrument or spacecraft id: {missing}.")
+        return sc_lookup[sc] + '_' + sensor_lookup[ins]
 
     @property
     def sensor_name(self):
@@ -61,7 +68,7 @@ class VoyagerCameraIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDist
     @property
     def ephemeris_start_time(self):
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+            self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
             # To get shutter end (close) time, subtract 2 seconds from the start time
             self._ephemeris_start_time -= 2
             # To get shutter start (open) time, take off the exposure duration from the end time.

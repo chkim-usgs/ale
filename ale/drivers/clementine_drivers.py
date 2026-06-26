@@ -1,4 +1,6 @@
-from ale.base import Driver
+import pyspiceql
+
+from ale.base import Driver, WrongInstrumentException
 from ale.base.label_isis import IsisLabel
 from ale.base.data_naif import NaifSpice
 from ale.base.type_distortion import NoDistortion
@@ -30,7 +32,10 @@ class ClementineIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistort
         "HIRES": "High Resolution Camera",
         "LWIR": "Long Wave Infrared Camera"
         }
-        return lookup_table[super().instrument_id]
+        key = super().instrument_id
+        if key not in lookup_table:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return lookup_table[key]
 
     @property
     def sensor_name(self):
@@ -71,7 +76,7 @@ class ClementineIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistort
     @property
     def ephemeris_start_time(self):
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+            self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ephemeris_start_time
         
     @property

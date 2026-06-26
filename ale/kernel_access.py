@@ -3,13 +3,18 @@ from glob import glob
 from itertools import groupby, chain
 import os
 from os import path
+from tempfile import NamedTemporaryFile
 import re
 import warnings
+from collections.abc import Iterable
 
 import numpy as np
 import pvl
+import json
+import pyspiceql
 
 from ale import spice_root
+from ale import logger
 from ale.util import get_isis_preferences
 from ale.util import get_isis_mission_translations
 from ale.util import read_pvl
@@ -17,6 +22,149 @@ from ale.util import search_isis_db
 from ale.util import dict_merge
 from ale.util import dict_to_lower
 from ale.util import expandvars
+
+def get_kernels_from_metakernel(metakernel, new_root=spice_root, old_root='/usgs/cpkgs/isis3/data'):
+    """
+    Given a metakernel:
+    1. Replacing the old root with the new root.
+    2. Check if its kernels are visibile at the new root.
+    3. load the new metakernel (with updated root) from a temp file.
+    
+    Parameters
+    ----------
+    kernel : str
+             Path of the metakernel 
+             (Presumably, containing default PATH_VALUES that have failed)
+
+    new_root : str
+               The new root to use (Defaults to ALESPICEROOT/ISISROOT)
+
+    old_root : str
+               The old root to replace. (Defaults to /usgs/cpkgs/isis3/data)
+    """
+
+    # For a section of an MK, returns all strings that match (are between quotes)
+    def read_section(text_lines, opener, closers, match="'(.*?)'"):
+        matches = []
+        in_section = False
+        for line in text_lines:
+            in_section = in_section or re.search(opener, line)
+            for closer in closers:
+                if re.search(closer, line):
+                    in_section = False
+            if in_section:
+                matches.extend(re.findall(match, line))
+        return matches
+
+    # Path Symbols/Metakernel reading
+    path_values     = []        # base paths from kernel
+    path_symbols    = []
+
+    default_paths   = {}        # dict of base paths
+    spiceroot_paths = {}        # dict of spice_root-based paths
+    
+    # Kernel Lists
+    listed_kernels    = []      # kernels with path symbols as listed in metakernel
+    default_kernels   = []      # kernels with subbed mk path
+    spiceroot_kernels = []      # kernels with subbed spice root path
+
+    missing_default_kernels   = False
+    missing_spiceroot_kernels = False
+    
+    check_spiceroot = True
+
+    if isinstance(new_root, str):
+        if new_root.endswith('/'):
+            new_root = new_root[:-1]
+    else:
+        check_spiceroot = False
+        logger.debug("new_root is not a string.  Likely, ALESPICEROOT is not set.\nCannot check ALESPICEROOT for corrected metakernel paths.")
+
+    # Check if mk is a file, show its contents
+    extension = os.path.splitext(metakernel)[1]
+    if extension.lower() != '.tm':
+        raise ValueError(f'File {metakernel} is not a metakernel (does not have the .tm file extension).')
+
+    # Read mk into memory
+    logger.debug("Reading vaules from MK file")
+    with open(metakernel, 'r') as mk:
+        mklines = mk.readlines()
+
+    # Read Path Values, Path Symbols, and Kernels to Load
+    path_values = read_section(mklines, r'PATH_VALUES\s*=', 
+                               [r'PATH_SYMBOLS\s*=', r'KERNELS_TO_LOAD\s*=', r'\\begintext'])
+
+    path_symbols = read_section(mklines, r'PATH_SYMBOLS\s*=', 
+                               [r'PATH_VALUES\s*=', r'KERNELS_TO_LOAD\s*=', r'\\begintext'])
+    
+    listed_kernels = read_section(mklines, r'KERNELS_TO_LOAD\s*=', 
+                               [r'PATH_VALUES\s*=', r'PATH_SYMBOLS\s*=', r'\\begintext'])
+
+    logger.debug(f"Path values: {path_values}")
+    logger.debug(f"Path symbols: {path_symbols}")
+    logger.debug(f"Kernels to Load from metakernel: {listed_kernels}") 
+
+    if len(listed_kernels) == 0:
+        raise ValueError(f"No kernels were found listed in this metakernel: {metakernel}")
+
+    # Create Path Dicts
+    if(len(path_symbols) != len(path_values)):
+        msg = f"The number of PATH_SYMBOLS ({len(path_symbols)})"
+        msg = msg + f"and PATH_VALUES ({len(path_values)}) found"
+        msg = msg + f"were not the same in metakernel {metakernel}."
+        raise ValueError(msg)
+    else:
+        for index, key in enumerate(path_symbols):
+            default_paths[key] = path_values[index]
+            if check_spiceroot:
+                spiceroot_paths[key] = re.sub(old_root, new_root, path_values[index])
+
+    # Check default mk paths for kernels
+    for kernel in listed_kernels:
+        default_kernel = kernel
+        for symbol, path in default_paths.items():
+            default_kernel = default_kernel.replace('$' + symbol, path)
+
+        if os.path.isfile(default_kernel):
+            default_kernels.append(default_kernel)
+        else:
+            logger.warning(f"Could not find kernel in paths from metakernal: {default_kernel}.  Looking under ALESPICEROOT if set...")
+            missing_default_kernels = True
+            break
+
+    # If kernels missing from default, Check spice_root paths for kernels
+    if missing_default_kernels and check_spiceroot:
+
+        for kernel in listed_kernels:
+            spiceroot_kernel = kernel
+            for symbol, path in spiceroot_paths.items():
+                spiceroot_kernel = spiceroot_kernel.replace('$' + symbol, path)
+
+            if os.path.isfile(spiceroot_kernel):
+                spiceroot_kernels.append(spiceroot_kernel)
+            else:
+                missing_spiceroot_kernels = True
+                raise FileNotFoundError(f"""One or more kernel was missing from the default path in the metakernel,
+                                        so ALE looked under the ALESPICEROOT path for kernels, 
+                                        but could not find this kernel there: {spiceroot_kernel}""")
+    
+    # Found kernels under default mk path, return those
+    if not missing_default_kernels and len(default_kernels) > 0:
+        return default_kernels
+
+    # Found kernels under spiceroot, return those
+    elif not missing_spiceroot_kernels and len(spiceroot_kernels) > 0:
+        return spiceroot_kernels
+    
+    # Kernels missing, Error message
+    errmsg = f"""One or more kernels from this metakernel ({metakernel}) were not found... 
+                {len(default_kernels)} found under paths from metakernel: {path_values}; 
+                Missing kernels under metakernel path? {missing_default_kernels}; 
+                {len(spiceroot_kernels)} found under ALESPICEROOT path: {new_root}; 
+                Missing kernels under ALESPICEROOT path? {missing_spiceroot_kernels}; 
+                (If one kernel was missing, ALE did not search for more kernels under the same path.)
+                """
+    raise FileNotFoundError(errmsg)
 
 def get_metakernels(spice_dir=spice_root, missions=set(), years=set(), versions=set()):
     """
@@ -80,9 +228,21 @@ def get_metakernels(spice_dir=spice_root, missions=set(), years=set(), versions=
 
         metakernels = []
         for k in metakernel_paths:
+            # mission_year_version filename pattern. When only one segment
+            # follows the mission (e.g. 'lro_2013.tm' or 'ch2_v01.tm'), decide
+            # whether that segment is a year or a version: a 4-digit numeric
+            # segment is treated as the year (insert N/A in the version slot);
+            # anything else is treated as a version (insert N/A in the year
+            # slot, the legacy behavior). This makes 'lro_2013' parse as
+            # year='2013', version='N/A' so versions='latest' picks the right
+            # year, while preserving 'ch2_v01' as year='N/A', version='v01'
+            # so it still matches any-year filter.
             components = path.splitext(path.basename(k))[0].split('_') + [k]
             if len(components) == 3:
-                components.insert(1, 'N/A')
+                if re.fullmatch(r'\d{4}', components[1]):
+                    components.insert(2, 'N/A')
+                else:
+                    components.insert(1, 'N/A')
 
             metakernels.append(dict(zip(metakernel_keys, components)))
 
@@ -130,16 +290,25 @@ def generate_kernels_from_cube(cube,  expand=False, format_as='list'):
         Dictionary of lists of kernels with the keys being the Keywords from the Kernels group of
         cube itself, and the values being the values associated with that Keyword in the cube.
     """
-    # enforce key order
-    mk_paths = OrderedDict.fromkeys(
-        ['TargetPosition', 'InstrumentPosition',
-         'InstrumentPointing', 'Frame', 'TargetAttitudeShape',
-         'Instrument', 'InstrumentAddendum', 'LeapSecond',
-         'SpacecraftClock', 'Extra'])
-
     # just work with full path
     cube = os.path.abspath(cube)
-    cubelabel = pvl.load(cube)
+    cubelabel = None
+    try:
+        cubelabel = pvl.load(cube)
+    except:
+        cubelabel = None
+    
+    if (cubelabel == None):
+        try:
+            from osgeo import gdal
+            gdal.UseExceptions()
+            geodata = gdal.Open(cube)
+            cubelabel = json.loads(geodata.GetMetadata("json:ISIS3")[0])
+        except Exception as e:
+            cubelabel = None
+    
+    if (cubelabel == None):
+        raise RuntimeError(f"Could not parse {cube} for pvl or json label")
 
     try:
         kernel_group = cubelabel['IsisCube']
@@ -155,33 +324,28 @@ def get_kernels_from_isis_pvl(kernel_group, expand=True, format_as="list"):
         ['TargetPosition', 'InstrumentPosition',
          'InstrumentPointing', 'Frame', 'TargetAttitudeShape',
          'Instrument', 'InstrumentAddendum', 'LeapSecond',
-         'SpacecraftClock', 'Extra'])
-
+         'SpacecraftClock', 'Extra', 'Clock', 'ShapeModel'])
 
     if isinstance(kernel_group, str):
         kernel_group = pvl.loads(kernel_group)
 
     kernel_group = kernel_group["Kernels"]
 
-    def load_table_data(key):
+    def read_kernels(key):
         mk_paths[key] = kernel_group.get(key, None)
-        if isinstance(mk_paths[key], str):
+        if (mk_paths[key] == "Null"):
+            mk_paths[key] = None
+        if isinstance(mk_paths[key], str) or mk_paths[key] == None:
             mk_paths[key] = [mk_paths[key]]
         while 'Table' in mk_paths[key]: mk_paths[key].remove('Table')
         while 'Nadir' in mk_paths[key]: mk_paths[key].remove('Nadir')
 
-    load_table_data('TargetPosition')
-    load_table_data('InstrumentPosition')
-    load_table_data('InstrumentPointing')
-    load_table_data('TargetAttitudeShape')
-    # the rest
-    mk_paths['Frame'] = [kernel_group.get('Frame', None)]
-    mk_paths['Instrument'] = [kernel_group.get('Instrument', None)]
-    mk_paths['InstrumentAddendum'] = [kernel_group.get('InstrumentAddendum', None)]
-    mk_paths['SpacecraftClock'] = [kernel_group.get('SpacecraftClock', None)]
-    mk_paths['LeapSecond'] = [kernel_group.get('LeapSecond', None)]
-    mk_paths['Clock'] = [kernel_group.get('Clock', None)]
-    mk_paths['Extra'] = [kernel_group.get('Extra', None)]
+    for key in mk_paths.keys():
+        read_kernels(key)
+
+    if (mk_paths['ShapeModel'][0]):
+        if (os.path.splitext(mk_paths['ShapeModel'][0])[-1] != "bds"):
+            mk_paths['ShapeModel'] = [None]
 
     # handles issue with OsirisRex instrument kernels being in a 2d list
     if isinstance(mk_paths['Instrument'][0], list):
@@ -218,6 +382,7 @@ def get_kernels_from_isis_pvl(kernel_group, expand=True, format_as="list"):
         return mk_paths
     elif (format_as == 'spiceql'):
         mk_paths.pop("Clock")
+        mk_paths.pop("ShapeModel")
         mk_paths["ck"] = [k.replace("$", "") for k in mk_paths.pop("InstrumentPointing") if k]
         mk_paths["spk"] = [k.replace("$", "") for k in mk_paths.pop("InstrumentPosition") if k]
         mk_paths["pck"] = [k.replace("$", "") for k in mk_paths.pop("TargetAttitudeShape") if k]

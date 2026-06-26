@@ -1,6 +1,8 @@
 from networkx.algorithms.shortest_paths.generic import shortest_path
 
-import json 
+import os
+import json
+import logging
 
 from ale.base.type_sensor import LineScanner, Framer, Radar, PushFrame
 from ale import logger
@@ -21,7 +23,13 @@ def to_isd(driver):
     """
      
     driver_data = driver.to_dict()
-    logger.debug(f"driver_data:\n{driver_data}")
+    if logger.isEnabledFor(logging.DEBUG):
+        for k, v in driver_data.items():
+            if isinstance(v, list):
+                    if len(v) > 100: v = v[:10] + [f"..."] + v[-10:]
+                    logger.debug(f"{k}: {v}")
+            logger.debug(f"{k}: {v}")
+
     isd = {}
     isd['isis_camera_version'] = driver_data["sensor_model_version"]
 
@@ -123,9 +131,9 @@ def to_isd(driver):
     # (destination, intermediate, ..., intermediate, source)
     instrument_pointing['time_dependent_frames'] = shortest_path(frame_chain, destination_frame, J2000)
     time_dependent_rotation = frame_chain.compute_rotation(J2000, destination_frame)
-    instrument_pointing['ck_table_start_time'] = time_dependent_rotation.times[0]
-    instrument_pointing['ck_table_end_time'] = time_dependent_rotation.times[-1]
-    instrument_pointing['ck_table_original_size'] = len(time_dependent_rotation.times)
+    instrument_pointing['ck_table_start_time'] = driver_data["ephemeris_time"][0]
+    instrument_pointing['ck_table_end_time'] = driver_data["ephemeris_time"][-1]
+    instrument_pointing['ck_table_original_size'] = len(driver_data["ephemeris_time"])
     instrument_pointing['ephemeris_times'] = time_dependent_rotation.times
     instrument_pointing['quaternions'] = time_dependent_rotation.quats[:, [3, 0, 1, 2]]
     instrument_pointing['angular_velocities'] = time_dependent_rotation.av
@@ -207,12 +215,37 @@ def to_isd(driver):
         raise Exception('No CSM sensor model name found!')
 
     # remove extra qualities
-    # TODO: Rewuires SpiceQL API update to get relative kernels
-    # if driver.kernels and isinstance(driver.kernels, dict): 
-    #     isd["kernels"] = {k: v for k, v in driver.kernels.items() if not "_quality" in k or driver.spiceql_mission in k }
-    # elif driver.kernels and isinstance(driver.kernels, list): 
-    #     isd["kernels"] = driver.kernels
-    # else: 
-    #     isd["kernels"] = {}
+    if 'kernels' in driver_data and isinstance(driver.kernels, dict):
+        for k,v in driver.kernels.items():
+            # check that the keys are valid kernel types or quality types
+            if k not in ["ck", "spk", "tspk", "fk", "ik", "iak", "pck", "lsk", "sclk", "misc", driver.spiceql_mission+"_spk_quality", driver.spiceql_mission+"_ck_quality"]:
+                raise ValueError(f"Kernels key [{k}] is not valid.")
+            if k in ["ck", "spk", "tspk", "fk", "ik", "iak", "pck", "lsk", "sclk", "misc"]:
+                if not isinstance(v, list):
+                    raise ValueError(f"Kernel [{k}] must be set to a list of kernels.")
+                isd["kernels"] = driver.kernels
+            elif k in [driver.spiceql_mission+"_spk_quality", driver.spiceql_mission+"_ck_quality"]:
+                if not isinstance(v, str):
+                    raise ValueError(f"Kernel quality type [{k}] must be set to a string.")
+        isd["kernels"] = driver.kernels #{k: v for k, v in driver.kernels.items() if not "_quality" in k and not driver.spiceql_mission in k }
+    elif 'kernels' in driver_data and isinstance(driver.kernels, list): 
+        kernels_dict  = {}
+        for k in driver.kernels:
+            if "ISISDATA" in os.environ:
+                k = k.replace(os.environ["ISISDATA"], "")
+            if "ALESPICEROOT" in os.environ:
+                k = k.replace(os.environ["ALESPICEROOT"], "")
+            if ("base/kernels/spk" in k):
+                k_type = "tspk"
+            else:
+                k_split = k.split('/')
+                k_type = k_split[-2]
+            if k_type in kernels_dict and isinstance(kernels_dict[k_type], list):
+                kernels_dict[k_type].append(k)
+            else:
+                kernels_dict.update({k_type: [k]})
+        isd["kernels"] = kernels_dict
+    else: 
+        isd["kernels"] = {}
 
     return isd

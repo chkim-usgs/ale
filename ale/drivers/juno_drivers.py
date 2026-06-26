@@ -1,9 +1,12 @@
+import pyspiceql
+
 from ale import util
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import Framer
 from ale.base.type_distortion import NoDistortion
 from ale.base.base import Driver
+from ale.base import WrongInstrumentException
 
 class JunoJunoCamIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion, Driver):
     """
@@ -22,7 +25,10 @@ class JunoJunoCamIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistor
           instrument id
         """
         look_up = {'JNC': 'JUNO_JUNOCAM'}
-        return look_up[super().instrument_id]
+        key = super().instrument_id
+        if key not in look_up:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return look_up[key]
 
     @property
     def ephemeris_start_time(self):
@@ -69,7 +75,7 @@ class JunoJunoCamIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistor
         """
         if not hasattr(self, "_naif_keywords"):
           filter_code = self.label['IsisCube']['BandBin']['NaifIkCode']
-          filter_keywords = self.spiceql_call("findMissionKeywords", {"key": f"*{filter_code}*", "mission": self.spiceql_mission})
+          filter_keywords = pyspiceql.findMissionKeywords(key=f"*{filter_code}*", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
           self._naif_keywords = super().naif_keywords
           if filter_keywords:
             self._naif_keywords = self._naif_keywords | filter_keywords

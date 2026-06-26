@@ -1,7 +1,7 @@
 import pvl
-import spiceypy as spice
+import pyspiceql
 
-from ale.base import Driver
+from ale.base import Driver, WrongInstrumentException
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice, read_table_data, parse_table
 from ale.base.label_isis import IsisLabel
@@ -23,7 +23,10 @@ class ApolloMetricIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDisto
         inst_id_lookup = {
             "METRIC" : "APOLLO_METRIC"
         }
-        return inst_id_lookup[super().instrument_id] 
+        key = super().instrument_id
+        if key not in inst_id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return inst_id_lookup[key] 
     
     @property
     def ikid(self):
@@ -74,14 +77,22 @@ class ApolloMetricIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDisto
         # Check for units on the PVL keyword
         if isinstance(exposure_duration, pvl.collections.Quantity):
             units = exposure_duration.units
-            if "ms" in units.lower() or 'milliseconds' in units.lower():
-                exposure_duration = exposure_duration.value * 0.001
-            else:
-                # if not milliseconds, the units are probably seconds
-                exposure_duration = exposure_duration.value
+            value = exposure_duration.value
+        elif isinstance(exposure_duration, dict):
+            units = ""
+            value = exposure_duration["value"]
+            if "unit" in exposure_duration:
+                units = exposure_duration["unit"]
         else:
             # if no units are available, assume the exposure duration is given in milliseconds
-            exposure_duration = exposure_duration * 0.001
+            units = "ms"
+            value = exposure_duration
+
+        if "ms" in units.lower() or 'milliseconds' in units.lower():
+            exposure_duration = value * 0.001
+        else:
+            # if not milliseconds, the units are probably seconds
+            exposure_duration = value
         return exposure_duration
 
     @property
@@ -95,7 +106,7 @@ class ApolloMetricIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDisto
         : str
           Spacecraft clock start count
         """
-        return self.spiceql_call("utcToEt", {"utc" : self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+        return pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), useWeb=self.use_web, searchKernels=self.search_kernels)[0] 
 
     @property
     def ephemeris_stop_time(self):
@@ -155,7 +166,10 @@ class ApolloPanIsisLabelIsisSpiceDriver(LineScanner, IsisLabel, IsisSpice, NoDis
             "APOLLO_PAN": "APOLLO PANORAMIC CAMERA"
         }
 
-        return id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
 
     @property

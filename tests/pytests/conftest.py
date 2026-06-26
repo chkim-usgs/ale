@@ -96,6 +96,9 @@ dirs = next(os.walk(data_root, topdown=True))[1]
 dirs = [d for d in dirs if not d.startswith('.')]
 image_2_data = {}
 
+def compare_quats(quat1, quat2, tolerance=1e-05):
+    return np.allclose(quat1, quat2, rtol=tolerance) or np.allclose(quat1, -quat2, rtol=tolerance)
+
 for d in dirs:
     tmp = os.path.join(data_root, d)
     image_2_data[d] = [os.path.join(tmp, f) for f in os.listdir(tmp) if not f.startswith('.') and os.path.splitext(f)[1] != '.lbl']
@@ -218,10 +221,10 @@ def convert_kernels(kernels):
                     warnings.warn('Failed to convert transfer kernel, ' + kernel + ', skipping...')
                 else:
                     kernel = matches.group(1)
-                    binary_kernels.append(kernel)
+                    binary_kernels.append(os.path.abspath(kernel))
             except:
                 raise Exception(f"Unable to convert {path} to binary kernel")
-        updated_kernels.append(kernel)
+        updated_kernels.append(os.path.abspath(kernel))
     
     # Sort Kernels
     # Ensure that the ISIS Addendum kernel is last in case it overrides

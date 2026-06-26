@@ -5,7 +5,8 @@ from numpy.polynomial.polynomial import polyval
 import networkx as nx
 from networkx.algorithms.shortest_paths.generic import shortest_path
 
-from ale.spiceql_access import get_ephem_data, spiceql_call
+import pyspiceql
+
 from ale.rotation import ConstantRotation, TimeDependentRotation
 from ale import util
 from ale import logger
@@ -131,20 +132,25 @@ class FrameChain(nx.DiGraph):
         # Do this call so we know if we can get exact ck times for our data
         if exact_ck_times and len(ephemeris_times) > 1 and not nadir:
             try:
-                times = spiceql_call("extractExactCkTimes", {"observStart": ephemeris_times[0] + inst_time_bias, 
-                                                             "observEnd": ephemeris_times[-1] + inst_time_bias, 
-                                                             "targetFrame": sensor_frame,
-                                                             "mission": mission,
-                                                             "searchKernels": frame_chain.search_kernels},
-                                                             use_web=frame_chain.use_web)
+                times = pyspiceql.extractExactCkTimes(observStart=ephemeris_times[0] + inst_time_bias, 
+                                                      observEnd=ephemeris_times[-1] + inst_time_bias, 
+                                                      targetFrame=sensor_frame,
+                                                      mission=mission,
+                                                      ckQualities=["reconstructed"],
+                                                      searchKernels=frame_chain.search_kernels,
+                                                      useWeb=frame_chain.use_web)[0]
 
                 if len(times) == 0:
+                    logger.debug(f"No exact CK times found")
                     exact_ck_times = False
+                else:
+                    logger.debug(f"Found {len(times)} exact CK time(s) for {sensor_frame}")
 
             except Exception as e:
                 exact_ck_times = False
                 logger.debug(f"Failed to extract exact ck times: {e}")
 
+        
         # Build graph async
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [
@@ -166,16 +172,22 @@ class FrameChain(nx.DiGraph):
             jobs.append({"et": time, 
                         "initialFrame": sensorFrame,
                         "mission": mission,
-                        "searchKernels": self.search_kernels})
+                        "ckQualities" : ["reconstructed"],
+                        "spkQualities" : ["reconstructed"],
+                        "searchKernels": self.search_kernels,
+                        "useWeb": self.use_web})
         jobs.append({"et": time, 
                      "initialFrame": targetFrame,
                      "mission": mission,
-                     "searchKernels": self.search_kernels})
+                     "ckQualities" : ["reconstructed"],
+                     "spkQualities" : ["reconstructed"],
+                     "searchKernels": self.search_kernels,
+                     "useWeb": self.use_web})
         
         logger.debug(f"Frame Trace Jobs: {jobs}")
         with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(spiceql_call, "frameTrace", job, self.use_web) for job in jobs]
-            results = [future.result() for future in futures]
+            futures = [executor.submit(pyspiceql.frameTrace, **job) for job in jobs]
+            results = [future.result()[0] for future in futures]
 
         if nadir:
             results.insert(0, ([[], []]))
@@ -257,7 +269,7 @@ class FrameChain(nx.DiGraph):
         return None
 
 
-    def generate_rotations(self, frames, times, time_bias, rotation_type, sensor_frame, frame_chain, nadir, exact_ck_times, mission=""):
+    def generate_rotations(self, frames, times, time_bias, rotation_type, exact_ck_frame, frame_chain, nadir, exact_ck_times, mission=""):
         """
         Computes the rotations based on a list of tuples that define the
         relationships between frames as (source, destination) and a list of times to
@@ -281,27 +293,45 @@ class FrameChain(nx.DiGraph):
         logger.debug(f"Generate rotation times: {times}")
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = []
-
             for s, d in frames:
                 if exact_ck_times and len(times) > 1:
-                    function_args = {"startEt": start_et+time_bias, "stopEt": stop_et+time_bias, "toFrame": d, "refFrame": s, "mission": mission, "searchKernels": self.search_kernels, "ckQualities": ["smithed", "reconstructed"], "fullKernelPath": False}
-                    futures.append(executor.submit(spiceql_call, "getExactTargetOrientations", function_args, self.use_web))
+                    function_args = {"startEt": start_et+time_bias, 
+                                     "stopEt": stop_et+time_bias, 
+                                     "toFrame": d, 
+                                     "refFrame": s, 
+                                     "exactCkFrame": exact_ck_frame, 
+                                     "mission": mission, 
+                                     "ckQualities" : ["reconstructed"],
+                                     "searchKernels": self.search_kernels, 
+                                     "useWeb": self.use_web}
+                    logger.debug(f"Exact CK times function args: {function_args}")
+                    futures.append(executor.submit(pyspiceql.getExactTargetOrientations, **function_args))
                 else:
-                    function_args = {"toFrame": d, "refFrame": s, "mission": mission, "searchKernels": self.search_kernels}
-                    futures.append(executor.submit(get_ephem_data, times, "getTargetOrientations", 150, self.use_web, function_args))
+                    function_args = {"startEt": start_et,
+                                     "stopEt": stop_et,
+                                     "numRecords": len(times),
+                                     "ckQualities" : ["reconstructed"],
+                                     "toFrame": d, 
+                                     "refFrame": s, 
+                                     "mission": mission,
+                                     "searchKernels": self.search_kernels, 
+                                     "useWeb": self.use_web}
+                    logger.debug(f"Non-exact CK times function args: {function_args}")
+                    futures.append(executor.submit(pyspiceql.getTargetOrientationsRanged, **function_args))
 
-            quats_and_avs_per_frame = np.array([future.result() for future in futures])
-        logger.debug(f"Quats and AVs per frame: {quats_and_avs_per_frame}")
+            quats_and_avs_per_frame = np.array([future.result()[0] for future in futures])
+            logger.debug(f"Returned Quats and AVs per frame: {quats_and_avs_per_frame}")
 
         if exact_ck_times and len(times) > 1 and len(frames) > 0:
             times = [quat_av[0] for quat_av in quats_and_avs_per_frame[0]]
-            quats_and_avs_per_frame = np.array([quats_and_avs[:,1:] for quats_and_avs in quats_and_avs_per_frame])
+            quats_and_avs_per_frame = [quats_and_avs[:, 1:] for quats_and_avs in quats_and_avs_per_frame]
 
         for i, frame in enumerate(frames):
             quats_and_avs = quats_and_avs_per_frame[i]
+            logger.debug(f"Quats and AVs per frame: {quats_and_avs}")
             quats = np.zeros((len(times), 4))
             avs = []
-            _quats = np.array(quats_and_avs)[:, 0:4]
+            _quats = np.asarray(quats_and_avs)[:, 0:4]
             logger.debug(f"Quats: {_quats}")
             for j, quat in enumerate(_quats):
                 quats[j,:3] = quat[1:]
@@ -312,8 +342,15 @@ class FrameChain(nx.DiGraph):
 
             biased_times = [time - time_bias for time in times]
             if rotation_type == TimeDependentRotation:
+                logger.debug(f"Time Dependent Quats: {quats}")
+                logger.debug(f"First 10 Biased times: {biased_times[:10]}...")
+                logger.debug(f"Frame: {frame}")
+                logger.debug(f"First 10 AVs: {avs[:10]} ...")
                 rotation = TimeDependentRotation(quats, biased_times, frame[0], frame[1], av=avs)
             else:
+                logger.debug(f"Constant Quats: {quats}")
+                logger.debug(f"Frame: {frame}")
                 rotation = ConstantRotation(quats[0], frame[0], frame[1])
+            logger.debug(f"Rotation: {rotation}")
             self.add_edge(rotation=rotation)
         

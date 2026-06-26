@@ -7,7 +7,7 @@
 # Specify the required version of CMake.
 # cmake 3.15 required for findPython virtualenv configuration
 cmake_minimum_required(VERSION 3.15)
-project(ale VERSION 1.0.0 DESCRIPTION "Abstraction Library for Ephemerides ")
+project(ale VERSION 1.2.0 DESCRIPTION "Abstraction Library for Ephemerides ")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -31,7 +31,7 @@ else()
 endif()
 
 if(ALE_USE_EXTERNAL_EIGEN)
-  find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+  find_package(Eigen3 REQUIRED NO_MODULE)
 else()
   add_library (eigen INTERFACE)
   add_library (Eigen3::Eigen ALIAS eigen)
