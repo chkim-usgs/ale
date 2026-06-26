@@ -124,5 +124,5 @@ jobs:
         with:
           name: ale-py${{ matrix.python-version }}
           path: |
-            ${{ github.workspace }}\build\Release\ale.dll
-            ${{ github.workspace }}\build\Release\ale.lib
+            C:\a\ale\ale\build\Release\ale.dll
+            C:\a\ale\ale\build\Release\ale.lib
