@@ -23,5 +23,4 @@ dependencies:
   - pyyaml
   - requests
   - scipy
-  - setuptools
   - spiceypy>=6.0.0
