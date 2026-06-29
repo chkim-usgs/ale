@@ -3,10 +3,10 @@ name: Pull-Request-CI
 on:
   pull_request:
     branches:
-      - main
+      - pipeline
   push:
     branches:
-      - main
+      - pipeline
 
 jobs:
   Build-and-Test-LinuxOsx:
