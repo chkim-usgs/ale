@@ -213,10 +213,11 @@ def convert_kernels(kernels):
             # Get the full path to the kernel then truncate it to the relative path
             path = os.path.join(data_root, kernel)
             path = os.path.relpath(path)
-            # Determine expected binary output path
+            # Determine expected binary output path (tobin outputs to same dir as input)
             binary_ext_map = {'.xsp': '.bsp', '.xc': '.bc', '.xpc': '.bpc'}
             binary_ext = binary_ext_map.get(split_kernel[1].lower(), '.bin')
-            binary_path = split_kernel[0] + binary_ext
+            path_without_ext = os.path.splitext(path)[0]
+            binary_path = path_without_ext + binary_ext
             # Remove existing binary to avoid tobin FILEALREADYEXISTS error
             if os.path.exists(binary_path):
                 os.remove(binary_path)
