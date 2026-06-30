@@ -24,4 +24,4 @@ dependencies:
   - requests
   - scipy
   - setuptools
-  - spiceypy=8.1.0
+  - spiceypy>=6.0.0
