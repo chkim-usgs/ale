@@ -36,18 +36,24 @@ release.
 ## [Unreleased]
 
 ### Added
+- Added order-8 Lagrange interpolation of quaternions to `ale::Orientations`, matching ISIS SpiceRotation, selectable via the new `LAGRANGE_ROTATION` interpolation type. [#726](https://github.com/DOI-USGS/ale/pull/726)
+- Re-enabled and fixed the TGO CaSSIS driver, which now emits the CaSSIS rational distortion. Validated against ISIS to within ~0.013 pixel across 130 framelets of two real stereo pairs. [#720](https://github.com/DOI-USGS/ale/pull/720)
 - `MroHiRisePds3LabelNaifSpiceDriver`, a PDS3 EDR label driver for HiRISE that generates an ISD directly from a raw EDR label without requiring an ISIS cube, paralleling the existing CTX PDS3 driver. [#702](https://github.com/DOI-USGS/ale/pull/702)
 - Added a catch to try correcting paths in metakernels (using spice_root) if they have been left as default. [#703](https://github.com/DOI-USGS/ale/pull/703)
+- Added ISD to kernel feature [#602](https://github.com/DOI-USGS/ale/issues/602)
 
 ### Changed
+- Reordered the `ale::DistortionType` enum so `RADIAL` and `TRANSVERSE` come in the same order as the matching enum in USGSCSM. The two enums are meant to share integer values (USGSCSM stores the selected type as this integer in the model state), but they had `RADIAL` and `TRANSVERSE` swapped. ALE never serializes this integer, it emits the distortion by name in the ISD, so aligning the ALE order to USGSCSM changes no on-disk data and only removes the mismatch. [#728](https://github.com/DOI-USGS/ale/pull/728)
 - The KPLO ShadowCam driver now subsamples the ephemeris by default (linear reduction, one sample per ~10 lines), as the Chandrayaan-2 driver does, so ISDs for the long ShadowCam strips no longer reach ~20 MB. When the driver defaults the reduction (including when the caller passes `--reduction none`, which cannot be respected for this sensor), it now logs a notice via the ale logger. The Chandrayaan-2 TMC-2 and OHRC drivers, which override the reduction the same way, log the same notice. [#719](https://github.com/DOI-USGS/ale/pull/719)
 
 ### Fixed
+- `getDistortionModel` now throws on an unrecognized distortion model name in the ISD instead of silently returning `TRANSVERSE`. The silent default applied the wrong distortion, or none, with no warning, and it masked typos and unsupported models. [#728](https://github.com/DOI-USGS/ale/pull/728)
 - Fixed undefined behavior in Rotation::toRotationMatrix by normalizing the quaternion before converting it to a rotation matrix. See [Eigen 3.4.1 Docs](https://libeigen.gitlab.io/eigen/docs-3.4/classEigen_1_1QuaternionBase.html#a8cf07ab9875baba2eecdd62ff93bfc3f) [#711](https://github.com/DOI-USGS/ale/pull/711)
 - Nadir velocity axis is now computed from the `INS<ikid>_TRANSX` keyword with a `[1] < [2]` index comparison, matching ISIS's `SpiceRotation::setEphemerisTimeNadir`. [#713](https://github.com/DOI-USGS/ale/pull/713)
 - Fixed `KeyError: 'MEX_HRSC_S1'` when generating an ISD for the MEX HRSC stereo channels (and any non-IR filter channel). The HRSC drivers now override `spiceql_mission` to return `hrsc`, matching the pattern used by the KPLO and Mariner drivers, instead of looking up the filter-specific instrument id in `spiceql_mission_map`, which only lists one channel. [#716](https://github.com/DOI-USGS/ale/pull/716)
 - Fixed printing kernel info via Error message, now a debug message instead. [#717](https://github.com/DOI-USGS/ale/pull/717)
 - Fixed CLOCK_ET in GTIFFs when they are not slash-separated [#718](https://github.com/DOI-USGS/ale/pull/718)
+- Fixed the metakernel lookup so `isd_generate` works out of the box for TGO CaSSIS: `get_metakernels` now reads the year and version from a filename by pattern (fixing multi-segment names such as OSIRIS-REx `orx_noola_2020_v06`) and skips forecast/planning metakernels (`predicted`, `plan`, `flip`) so the observation metakernel is selected, and `get_kernels_from_metakernel` resolves a relative `PATH_VALUES` against the metakernel's own directory. [#725](https://github.com/DOI-USGS/ale/pull/725)
 
 ## [1.2.0] - 2026-05-20
 
