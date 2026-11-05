@@ -1,6 +1,11 @@
 from networkx.algorithms.shortest_paths.generic import shortest_path
 
+import os
+import json
+import logging
+
 from ale.base.type_sensor import LineScanner, Framer, Radar, PushFrame
+from ale import logger
 
 def to_isd(driver):
     """
@@ -18,6 +23,13 @@ def to_isd(driver):
     """
      
     driver_data = driver.to_dict()
+    if logger.isEnabledFor(logging.DEBUG):
+        for k, v in driver_data.items():
+            if isinstance(v, list):
+                    if len(v) > 100: v = v[:10] + [f"..."] + v[-10:]
+                    logger.debug(f"{k}: {v}")
+            logger.debug(f"{k}: {v}")
+
     isd = {}
     isd['isis_camera_version'] = driver_data["sensor_model_version"]
 
@@ -37,7 +49,6 @@ def to_isd(driver):
         isd['name_model'] = 'USGS_ASTRO_LINE_SCANNER_SENSOR_MODEL'
         isd['interpolation_method'] = 'lagrange'
         
-        print(driver_data["line_scan_rate"])
         start_lines, start_times, scan_rates = driver_data["line_scan_rate"]
         isd['line_scan_rate'] = [[line, time, rate] for line, time, rate in zip(start_lines, start_times, scan_rates)]
         isd['starting_ephemeris_time'] = driver_data["ephemeris_start_time"]
@@ -46,7 +57,7 @@ def to_isd(driver):
     # frame sensor model specifics
     if isinstance(driver, Framer):
         isd['name_model'] = 'USGS_ASTRO_FRAME_SENSOR_MODEL'
-        isd['center_ephemeris_time'] = driver.center_ephemeris_time
+        isd['center_ephemeris_time'] = driver_data["center_ephemeris_time"]
 
     if isinstance(driver, PushFrame):
         isd['name_model'] = 'USGS_ASTRO_PUSH_FRAME_SENSOR_MODEL'
@@ -120,9 +131,9 @@ def to_isd(driver):
     # (destination, intermediate, ..., intermediate, source)
     instrument_pointing['time_dependent_frames'] = shortest_path(frame_chain, destination_frame, J2000)
     time_dependent_rotation = frame_chain.compute_rotation(J2000, destination_frame)
-    instrument_pointing['ck_table_start_time'] = time_dependent_rotation.times[0]
-    instrument_pointing['ck_table_end_time'] = time_dependent_rotation.times[-1]
-    instrument_pointing['ck_table_original_size'] = len(time_dependent_rotation.times)
+    instrument_pointing['ck_table_start_time'] = driver_data["ephemeris_time"][0]
+    instrument_pointing['ck_table_end_time'] = driver_data["ephemeris_time"][-1]
+    instrument_pointing['ck_table_original_size'] = len(driver_data["ephemeris_time"])
     instrument_pointing['ephemeris_times'] = time_dependent_rotation.times
     instrument_pointing['quaternions'] = time_dependent_rotation.quats[:, [3, 0, 1, 2]]
     instrument_pointing['angular_velocities'] = time_dependent_rotation.av
@@ -137,16 +148,16 @@ def to_isd(driver):
     instrument_pointing['constant_rotation'] = constant_rotation.rotation_matrix().flatten()
     isd['instrument_pointing'] = instrument_pointing
 
-    # interiror orientation
-    isd['naif_keywords'] = driver.naif_keywords
+    # interior orientation
+    isd['naif_keywords'] = driver_data["naif_keywords"]
 
     if isinstance(driver,LineScanner) or isinstance(driver, Framer) or isinstance(driver, PushFrame):
 
-        isd['detector_sample_summing'] = driver.sample_summing
-        isd['detector_line_summing'] = driver.line_summing
+        isd['detector_sample_summing'] = driver_data["sample_summing"]
+        isd['detector_line_summing'] = driver_data["line_summing"]
 
         isd['focal_length_model'] = {
-            'focal_length' : driver.focal_length
+            'focal_length' : driver_data["focal_length"]
         }
         isd['detector_center'] = {
             'line' : driver_data["detector_center_line"],
@@ -165,15 +176,15 @@ def to_isd(driver):
     positions, velocities, times = driver_data["sensor_position"]
     instrument_position['spk_table_start_time'] = times[0]
     instrument_position['spk_table_end_time'] = times[-1]
-    instrument_position['spk_table_original_size'] = len(times)
+    instrument_position['spk_table_original_size'] = len(driver_data["ephemeris_time"])
     instrument_position['ephemeris_times'] = times
     # Rotate positions and velocities into J2000 then scale into kilometers
+    rotated_positions = j2000_rotation.apply_at(positions, times)/1000
+    instrument_position['positions'] = rotated_positions
     # If velocities are provided, then rotate and add to ISD
     if velocities is not None:
         velocities = j2000_rotation.rotate_velocity_at(positions, velocities, times)/1000
         instrument_position['velocities'] = velocities
-    positions = j2000_rotation.apply_at(positions, times)/1000
-    instrument_position['positions'] = positions
     instrument_position["reference_frame"] = j2000_rotation.dest
     
     isd['instrument_position'] = instrument_position
@@ -185,13 +196,12 @@ def to_isd(driver):
     sun_position['spk_table_original_size'] = len(times)
     sun_position['ephemeris_times'] = times
     # Rotate positions and velocities into J2000 then scale into kilometers
+    rotated_positions = j2000_rotation.apply_at(positions, times)/1000
+    sun_position['positions'] = rotated_positions
     # If velocities are provided, then rotate and add to ISD
     if velocities is not None:
         velocities = j2000_rotation.rotate_velocity_at(positions, velocities, times)/1000
         sun_position['velocities'] = velocities
-    
-    positions = j2000_rotation.apply_at(positions, times)/1000
-    sun_position['positions'] = positions
     sun_position["reference_frame"] = j2000_rotation.dest
 
     isd['sun_position'] = sun_position
@@ -203,5 +213,39 @@ def to_isd(driver):
     # check that there is a valid sensor model name
     if 'name_model' not in isd:
         raise Exception('No CSM sensor model name found!')
+
+    # remove extra qualities
+    if 'kernels' in driver_data and isinstance(driver.kernels, dict):
+        for k,v in driver.kernels.items():
+            # check that the keys are valid kernel types or quality types
+            if k not in ["ck", "spk", "tspk", "fk", "ik", "iak", "pck", "lsk", "sclk", "misc", driver.spiceql_mission+"_spk_quality", driver.spiceql_mission+"_ck_quality"]:
+                raise ValueError(f"Kernels key [{k}] is not valid.")
+            if k in ["ck", "spk", "tspk", "fk", "ik", "iak", "pck", "lsk", "sclk", "misc"]:
+                if not isinstance(v, list):
+                    raise ValueError(f"Kernel [{k}] must be set to a list of kernels.")
+                isd["kernels"] = driver.kernels
+            elif k in [driver.spiceql_mission+"_spk_quality", driver.spiceql_mission+"_ck_quality"]:
+                if not isinstance(v, str):
+                    raise ValueError(f"Kernel quality type [{k}] must be set to a string.")
+        isd["kernels"] = driver.kernels #{k: v for k, v in driver.kernels.items() if not "_quality" in k and not driver.spiceql_mission in k }
+    elif 'kernels' in driver_data and isinstance(driver.kernels, list): 
+        kernels_dict  = {}
+        for k in driver.kernels:
+            if "ISISDATA" in os.environ:
+                k = k.replace(os.environ["ISISDATA"], "")
+            if "ALESPICEROOT" in os.environ:
+                k = k.replace(os.environ["ALESPICEROOT"], "")
+            if ("base/kernels/spk" in k):
+                k_type = "tspk"
+            else:
+                k_split = k.split('/')
+                k_type = k_split[-2]
+            if k_type in kernels_dict and isinstance(kernels_dict[k_type], list):
+                kernels_dict[k_type].append(k)
+            else:
+                kernels_dict.update({k_type: [k]})
+        isd["kernels"] = kernels_dict
+    else: 
+        isd["kernels"] = {}
 
     return isd

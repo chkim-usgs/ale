@@ -1,12 +1,13 @@
-import ale
-from ale.base import Driver
+import pyspiceql
+
+from ale.base import Driver, WrongInstrumentException
 from ale.base.label_isis import IsisLabel
 from ale.base.data_naif import NaifSpice
-from ale.base.type_distortion import NoDistortion
+from ale.base.type_distortion import RadialDistortion
 from ale.base.type_sensor import Framer
 
 
-class ClementineIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion, Driver):
+class ClementineIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, RadialDistortion, Driver):
     """
     Driver for reading UUVIS, HIRES, NIR, and LWIR ISIS3 Labels
     """
@@ -31,7 +32,10 @@ class ClementineIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistort
         "HIRES": "High Resolution Camera",
         "LWIR": "Long Wave Infrared Camera"
         }
-        return lookup_table[super().instrument_id]
+        key = super().instrument_id
+        if key not in lookup_table:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return lookup_table[key]
 
     @property
     def sensor_name(self):
@@ -72,7 +76,7 @@ class ClementineIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistort
     @property
     def ephemeris_start_time(self):
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+            self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ephemeris_start_time
         
     @property
@@ -126,5 +130,43 @@ class ClementineIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistort
           }
 
           return lookup_table[filter.upper()] * 0.038
-        
+
         return super().focal_length
+
+    @property
+    def odtk(self):
+        """
+        The four Clementine cameras use different optical distortion models in
+        ISIS. Only the NIR camera is modeled here as a single-parameter radial
+        distortion: ISIS NirCamera uses RadialDistortionMap(this, -0.0006364),
+        i.e. undistorted = distorted * (1 + k1 * r^2) with k1 = -0.0006364. The
+        USGSCSM RADIAL model applies undistorted = distorted * (1 - (c0 + c1 r^2
+        + c2 r^4)), so matching gives coefficients [0, -k1, 0] = [0, 0.0006364, 0].
+        The UVVIS (radial + decentering), HiRes (generic radial) and LWIR
+        (zero-coefficient) cameras are left distortion-free here.
+
+        Returns
+        -------
+        : list<float>
+          radial distortion coefficients [0, -k1, 0]
+        """
+        if self.instrument_id == "Near Infrared Camera":
+            return [0.0, 0.0006364, 0.0]
+        return [0.0, 0.0, 0.0]
+
+    @property
+    def detector_center_line(self):
+        # ISIS detector coordinates are 0.5-based (pixel centers at half integers);
+        # CSM is 0-based. Subtract 0.5 for the NIR camera, whose distortion is
+        # modeled above, as the LRO, MRO, Dawn and Cassini ISS drivers already do.
+        # UVVIS and HiRes distortion are not modeled here, so their detector center
+        # is left unchanged.
+        if self.instrument_id == "Near Infrared Camera":
+            return super().detector_center_line - 0.5
+        return super().detector_center_line
+
+    @property
+    def detector_center_sample(self):
+        if self.instrument_id == "Near Infrared Camera":
+            return super().detector_center_sample - 0.5
+        return super().detector_center_sample

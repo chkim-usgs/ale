@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch
 import pvl
 import numpy as np
-from ale.base.data_isis import IsisSpice
+from ale.base.data_isis import IsisSpice, get_naif_keyword
 
 from conftest import get_image_label
 
@@ -519,11 +519,13 @@ def test_sun_position(testdata):
 
 
 def test_detector_center_sample(testdata):
-    assert testdata.detector_center_sample == None
+    with pytest.raises(LookupError):
+         testdata.detector_center_sample
 
 
 def test_detector_center_line(testdata):
-    assert testdata.detector_center_line == None
+    with pytest.raises(LookupError):
+        testdata.detector_center_line
 
 
 def test_focal_length(testdata):
@@ -706,11 +708,19 @@ def test_no_tables():
     test_mix_in = IsisSpice()
     test_mix_in._file = test_file
     test_mix_in.label = pvl.load(test_file)
-    with pytest.raises(ValueError):
+    with pytest.raises(KeyError):
         test_mix_in.inst_pointing_table
-    with pytest.raises(ValueError):
+    with pytest.raises(KeyError):
         test_mix_in.body_orientation_table
-    with pytest.raises(ValueError):
+    with pytest.raises(KeyError):
         test_mix_in.inst_position_table
-    with pytest.raises(ValueError):
+    with pytest.raises(KeyError):
         test_mix_in.sun_position_table
+
+
+def test_missing_naif_keyword(testdata): 
+    try: 
+      get_naif_keyword(testdata, "fake", "not_real")
+      raise Exception("expected throw for fake naif keyword")
+    except LookupError as e: 
+      pass 

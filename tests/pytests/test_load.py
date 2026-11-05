@@ -4,20 +4,30 @@ from unittest.mock import patch
 from importlib import reload
 import json
 import os
+from pathlib import Path
 
 import ale
 from ale import util
 from ale.drivers import sort_drivers
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice
+from ale.formatters.formatter import to_isd
 
 from ale.drivers.mess_drivers import MessengerMdisPds3NaifSpiceDriver
 
-from conftest import get_image_label, get_image_kernels, convert_kernels
+from conftest import get_image_label, get_image_kernels, convert_kernels, get_isd, compare_dicts
 
 @pytest.fixture()
 def mess_kernels():
     kernels = get_image_kernels('EN1072174528M')
+    updated_kernels, binary_kernels = convert_kernels(kernels)
+    yield updated_kernels
+    for kern in binary_kernels:
+        os.remove(kern)
+
+@pytest.fixture()
+def mro_kernels():
+    kernels = get_image_kernels('B10_013341_1010_XN_79S172W')
     updated_kernels, binary_kernels = convert_kernels(kernels)
     yield updated_kernels
     for kern in binary_kernels:
@@ -34,7 +44,7 @@ def test_mess_load(class_truth, return_val, mess_kernels):
     label_file = get_image_label('EN1072174528M')
 
     try:
-        usgscsm_isd_str = ale.loads(label_file, {'kernels': mess_kernels}, 'usgscsm', False, **class_truth)
+        usgscsm_isd_str = ale.loads(label_file, {'kernels': mess_kernels}, 'ale', False, **class_truth)
         usgscsm_isd_obj = json.loads(usgscsm_isd_str)
 
         assert return_val is True
@@ -42,8 +52,21 @@ def test_mess_load(class_truth, return_val, mess_kernels):
         assert usgscsm_isd_obj['name_sensor'] == 'MERCURY DUAL IMAGING SYSTEM NARROW ANGLE CAMERA'
         assert usgscsm_isd_obj['name_model'] == 'USGS_ASTRO_FRAME_SENSOR_MODEL'
     except Exception as load_failure:
-        assert str(load_failure) == "No Such Driver for Label"
+        assert str(load_failure) == "No viable Driver for Label."
         assert return_val is False
+
+def test_mess_load_gtiff(mess_kernels):
+    data_root = os.path.join(Path(__file__).absolute().parent, 'data')
+    label_file = os.path.join(data_root, "EN1072174528M/EN1072174528M.tiff")
+
+    usgscsm_isd_str = ale.loads(label_file, {'kernels': mess_kernels, "attach_kernels": False})
+    usgscsm_isd_obj = json.loads(usgscsm_isd_str)
+    print(usgscsm_isd_obj)
+
+    compare_isd = get_isd("messmdis")
+
+    comparison = compare_dicts(usgscsm_isd_obj, compare_isd)
+    assert comparison == []
 
 def test_load_invalid_label():
     with pytest.raises(Exception):
@@ -56,16 +79,22 @@ def test_loads_invalid_label():
 def test_load_invalid_spice_root(monkeypatch):
     monkeypatch.delenv('ALESPICEROOT', raising=False)
     reload(ale)
+    reload(ale.base.data_naif)
 
     label_file = get_image_label('EN1072174528M')
     with pytest.raises(Exception):
         ale.load(label_file)
 
-
+def test_load_driver(mro_kernels):
+    label_file = get_image_label('B10_013341_1010_XN_79S172W')
+    my_driver = ale.drivers.get_driver_from_label(label_file, {'kernels': mro_kernels})
+    assert my_driver == ale.drivers.mro_drivers.MroCtxPds3LabelNaifSpiceDriver
+    
 def test_load_mes_from_metakernels(tmpdir, monkeypatch, mess_kernels):
     with patch.dict('os.environ', {'ALESPICEROOT': str(tmpdir)}):
         # reload module to repopulate ale.spice_root
         reload(ale)
+        reload(ale.base.data_naif)
 
         updated_kernels = mess_kernels
         print(updated_kernels)
@@ -76,18 +105,22 @@ def test_load_mes_from_metakernels(tmpdir, monkeypatch, mess_kernels):
             print(mk_str)
             mk_file.write(mk_str)
 
+
         usgscsm_isd_obj = ale.load(label_file, verbose=True)
 
     assert usgscsm_isd_obj['name_platform'] == 'MESSENGER'
     assert usgscsm_isd_obj['name_sensor'] == 'MERCURY DUAL IMAGING SYSTEM NARROW ANGLE CAMERA'
     assert usgscsm_isd_obj['name_model'] == 'USGS_ASTRO_FRAME_SENSOR_MODEL'
     reload(ale)
+    reload(ale.base.data_naif)
     assert not ale.spice_root
+    assert not ale.base.data_naif.spice_root
 
 def test_load_mes_with_no_metakernels(tmpdir, monkeypatch, mess_kernels):
     with patch.dict('os.environ', {'ALESPICEROOT': str(tmpdir)}):
         # reload module to repopulate ale.spice_root
         reload(ale)
+        reload(ale.base.data_naif)
 
         updated_kernels = mess_kernels
         label_file = get_image_label('EN1072174528M')
@@ -103,4 +136,6 @@ def test_load_mes_with_no_metakernels(tmpdir, monkeypatch, mess_kernels):
             usgscsm_isd_obj = ale.load(label_file, verbose=True)
 
     reload(ale)
+    reload(ale.base.data_naif)
     assert not ale.spice_root
+    assert not ale.base.data_naif.spice_root

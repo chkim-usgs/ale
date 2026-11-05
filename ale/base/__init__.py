@@ -1,9 +1,28 @@
 from ale.base.base import Driver
 
+class WrongInstrumentException(Exception):
+    """
+    Exception raised when an instrument is not recognized or is invalid.
+    """
+    pass
+
+class WrongLabelTypeException(Exception):
+    """
+    Exception raised when a label is not recognized or is invalid.
+    """
+    pass
+
+
 spiceql_mission_map = {
-    "APOLLO_METRIC" : "apollo", 
+    "APOLLO_METRIC" : "apollo15_metric", 
     "CHANDRAYAAN-1_M3": "m3",
     "CHANDRAYAAN-1_MRFFR": "mrffr",
+    "CHANDRAYAAN-2 ORBITER": "chandrayaan2",
+    "TMC-2" : "tmc2",
+    "CH2_TMC_FORE" : "tmc2",
+    "CH2_TMC_NADIR" : "tmc2",
+    "CH2_TMC_AFT" : "tmc2",
+    "CH2_OHRC" : "ohrc",
     "M3": "m3", 
     "CASSINI_ISS_NAC": "cassini",
     "CASSINI_ISS_WAC": "cassini",
@@ -16,6 +35,8 @@ spiceql_mission_map = {
     "DAWN_FC2_FILTER_6": "fc2",
     "DAWN_FC2_FILTER_7": "fc2",
     "DAWN_FC2_FILTER_8": "fc2",
+    "EUROPAM_EIS_WAC": "clipper",
+    "EUROPAM_EIS_NAC": "clipper",
     "GLL_SSI_PLATFORM": "galileo",
     "HAYABUSA_AMICA": "amica",
     "HAYABUSA_NIRS": "nirs",
@@ -75,11 +96,11 @@ spiceql_mission_map = {
     "LISM_TC1_SDH": "kaguya",
     "LISM_TC1_STH": "kaguya",
     "LISM_TC1_SSH": "kaguya",
-    "LO1_HIGH_RESOLUTION_CAMERA": "",
-    "LO2_HIGH_RESOLUTION_CAMERA": "",
-    "LO3_HIGH_RESOLUTION_CAMERA": "",
-    "LO4_HIGH_RESOLUTION_CAMERA": "",
-    "LO5_HIGH_RESOLUTION_CAMERA": "",
+    "LO1_HIGH_RESOLUTION_CAMERA": "lo",
+    "LO2_HIGH_RESOLUTION_CAMERA": "lo",
+    "LO3_HIGH_RESOLUTION_CAMERA": "lo",
+    "LO4_HIGH_RESOLUTION_CAMERA": "lo",
+    "LO5_HIGH_RESOLUTION_CAMERA": "lo",
     "TGO_CASSIS": "cassis",
     "VIKING ORBITER 1": "viking1",
     "VIKING ORBITER 2": "viking2",

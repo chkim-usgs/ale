@@ -5,14 +5,16 @@ channels:
 dependencies:
   - breathe
   - brotli
+  - brotli-python
   - cmake>=3.15
+  - cxx-compiler <2
   - eigen
-  - gdal
+  - gdal >=3.12.2
   - jupyter
   - networkx
   - nlohmann_json
   - numpy
-  - spiceql>=1.1.3
+  - spiceql>=1.3.0
   - pvl
   - pytest
   - pytest-cov
@@ -21,5 +23,7 @@ dependencies:
   - pytz
   - pyyaml
   - requests
-  - scipy>=1.4.0,<1.11
+  - scipy
+  - setuptools
   - spiceypy>=6.0.0
+  - swig

@@ -6,6 +6,8 @@ from scipy.spatial.transform import Rotation
 
 from ale.transformation import FrameChain
 from ale.transformation import ConstantRotation, TimeDependentRotation
+from ale import util 
+from ale import logger
 
 class LineScanner():
     """
@@ -45,6 +47,39 @@ class LineScanner():
         t0_ephemeris = self.ephemeris_start_time - self.center_ephemeris_time
         return [[0.5], [t0_ephemeris], [self.exposure_duration]]
 
+
+    @property
+    def exposure_rates(self):
+      """
+      Returns the start/stop times and exposure durations for the sensor.
+
+      Returns
+      -------
+      : list
+        list of start ets 
+      : list
+        list of stop ets
+      : list
+        list of exposure durations
+      """
+      # Convert line scan rate into start/stop times and exposure durations
+      start_ets = []
+      stop_ets = []
+      exposure_durations = []
+      start_lines, line_times, exposure_durations = self.line_scan_rate
+      start_lines = [line - 0.5 for line in start_lines]
+      num_lines = self.image_lines + 1
+      for i in range(len(start_lines)):
+          start_ets.append(line_times[i] + self.center_ephemeris_time)
+          if i + 1 > len(start_lines) - 1:
+            lines = num_lines - start_lines[i]
+          else:
+            lines = start_lines[i + 1] - start_lines[i]
+          stop_time = (line_times[i] + (exposure_durations[i] * lines)) + self.center_ephemeris_time
+          stop_ets.append(stop_time)
+      return start_ets, stop_ets, exposure_durations
+
+
     @property
     def ephemeris_time(self):
         """
@@ -62,7 +97,23 @@ class LineScanner():
           ephemeris times split based on image lines
         """
         if not hasattr(self, "_ephemeris_time"):
-            self._ephemeris_time = np.linspace(self.ephemeris_start_time, self.ephemeris_stop_time, self.image_lines + 1)
+            # Determine reduction mode. Default is "None" (No reduction). 
+            # Set reduction=Linear via props to apply a linear reduction.
+            reduction = self._props.get('reduction', 'none').lower()
+
+            if reduction == 'linear':
+                # Sample at most every Nth line to keep ISD file size in check
+                # for large linescan images (e.g., 177k lines for Chandrayaan-2
+                # TMC). For images under ~1000 lines, keep one sample per line
+                # to avoid reducing below 100 samples.
+                rate = self._props.get('ephem_sample_rate', 10)
+                reduced = self.image_lines // rate + 1
+                num_samples = reduced if reduced >= 100 else self.image_lines + 1
+            else:
+                # No reduction
+                num_samples = self.image_lines + 1
+
+            self._ephemeris_time = np.linspace(self.ephemeris_start_time, self.ephemeris_stop_time, num_samples)
         return self._ephemeris_time
 
     @property

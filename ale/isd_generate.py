@@ -133,20 +133,64 @@ def main():
         nargs="+",
         help="Path to image or label file (or multiple)."
     )
+    parser.add_argument(
+        "-s", "--search_kernels",
+        action="store_true",
+        help="Search for kernels using SpiceQL. Only applies to naif data based drivers"
+    )
+    parser.add_argument(
+        "-A", "--attach_kernels",
+        action="store_true",
+        help="Attach kernels to the ISD. Only applies to naif data based drivers"
+    )
+    parser.add_argument(
+        "--reduction",
+        type=str.lower,
+        choices=['none', 'linear', 'hermite'],
+        default='linear',
+        help="Type of reduction to apply to the ephemerides generated in the ISD. "
+             "Defaults to 'linear' (sampling every 10th line for images with >= 1000 lines). "
+             "Pass 'none' to disable reduction. If linear is selected, "
+             "the amount of reduction can be controlled by setting --ephem_sample_rate."
+    )
+    parser.add_argument(
+        "--ephem_sample_rate",
+        type=int,
+        help="Select every Nth ephemeris time when generating an ISD. This should only be set if a linear "
+             "reduction is applied."
+    )
     args = parser.parse_args()
 
-    log_level = logging.INFO
-    if args.verbose:
-        log_level = logging.WARNING
+    if (args.reduction != "linear" and args.ephem_sample_rate):
+        sys.exit(f"User selected an ephem_sample_rate with a reduction option \"{args.reduction}\" "
+                  "that does not use the ephem_sample_rate. Either remove the set ephem_sample_rate or "
+                  "select a different reduction option.\n\nRun \"isd_generate -h\" for reduction options.")
+    elif (args.reduction == "linear" and args.ephem_sample_rate is not None):
+        if (args.ephem_sample_rate <= 0):
+            sys.exit(f"User selected an ephem_sample_rate, \"{args.ephem_sample_rate}\" which is less than or "
+                      "equal to zero. An ephem_sample_rate greater than zero should be selected or "
+                      "no reduction should be applied.\n\nRun \"isd_generate -h\" for reduction options.")
 
-    logging.basicConfig(format="%(message)s", level=log_level)
+    if (not args.kernel and
+        not args.search_kernels and
+        not args.use_web_spice and
+        not args.only_isis_spice and
+        not os.environ.get('ALESPICEROOT')):
+        sys.exit("ALESPICEROOT is unset and no kernel source was provided. "
+                 "Set ALESPICEROOT (e.g. ALESPICEROOT=$ISISDATA), or pass "
+                 "--kernel/--search-kernels/--use-web-spice/--only-isis-spice.")
+
+    log_level = logging.ERROR
+    if args.verbose:
+        log_level = logging.INFO
+
     logger.setLevel(log_level)
 
     if args.kernel is None:
         k = None
     else:
         try:
-            k = ale.util.generate_kernels_from_cube(args.kernel, expand=True)
+            k = ale.kernel_access.generate_kernels_from_cube(args.kernel, expand=True)
         except (KeyError, pvl.exceptions.LexerError):
             k = [args.kernel, ]
 
@@ -160,7 +204,12 @@ def main():
 
     if len(args.input) == 1:
         try:
-            file_to_isd(args.input[0], args.out, radii, kernels=k, log_level=log_level, compress=args.compress, only_isis_spice=args.only_isis_spice, only_naif_spice=args.only_naif_spice, local=args.local, nadir=args.nadir)
+            file_to_isd(args.input[0], args.out, radii, kernels=k, log_level=log_level, 
+                        compress=args.compress, only_isis_spice=args.only_isis_spice, 
+                        only_naif_spice=args.only_naif_spice, use_web=args.use_web_spice, 
+                        local=args.local, nadir=args.nadir, search_kernels=args.search_kernels,
+                        attach_kernels=args.attach_kernels, reduction=args.reduction, 
+                        ephem_sample_rate=args.ephem_sample_rate)
         except Exception as err:
             # Seriously, this just throws a generic Exception?
             sys.exit(f"File {args.input[0]}: {err}")
@@ -177,7 +226,10 @@ def main():
                                        "only_naif_spice": args.only_naif_spice,
                                        "local": args.local,
                                        "nadir": args.nadir,
-                                       "use_web":args.use_web_spice}
+                                       "use_web":args.use_web_spice,
+                                       "attach_kernels": args.attach_kernels,
+                                       "reduction": args.reduction,
+                                       "ephem_sample_rate": args.ephem_sample_rate}
                 ): f for f in args.input
             }
             for f in concurrent.futures.as_completed(futures):
@@ -196,13 +248,17 @@ def file_to_isd(
     out: os.PathLike = None,
     radii: list = None,
     kernels: list = None,
-    log_level=logging.WARNING,
+    log_level=logging.ERROR,
     compress=False,
     only_isis_spice=False,
     only_naif_spice=False,
     local=False,
     nadir=False,
-    use_web=False):
+    use_web=False,
+    search_kernels=False,
+    attach_kernels=False,
+    reduction=None,
+    ephem_sample_rate=None):
     """
     Returns nothing, but acts as a thin wrapper to take the *file* and generate
     an ISD at *out* (if given, defaults to replacing the extension on *file*
@@ -236,12 +292,24 @@ def file_to_isd(
     if use_web:
         props["web"] = use_web
 
+    if attach_kernels:
+        props["attach_kernels"] = attach_kernels
+    
+    if search_kernels: 
+        props["search_kernels"] = search_kernels
+
+    if reduction: 
+        props["reduction"] = reduction
+        if reduction == "linear":
+            if ephem_sample_rate:
+                props["ephem_sample_rate"] = ephem_sample_rate
+
     if kernels is not None:
         kernels = [str(PurePath(p)) for p in kernels]
         props["kernels"] = kernels
-        usgscsm_str = ale.loads(file, props=props, verbose=log_level>logging.INFO, only_isis_spice=only_isis_spice, only_naif_spice=only_naif_spice)
+        usgscsm_str = ale.loads(file, props=props, verbose=log_level<=logging.INFO, only_isis_spice=only_isis_spice, only_naif_spice=only_naif_spice)
     else:
-        usgscsm_str = ale.loads(file, props=props, verbose=log_level>logging.INFO, only_isis_spice=only_isis_spice, only_naif_spice=only_naif_spice)
+        usgscsm_str = ale.loads(file, props=props, verbose=log_level<=logging.INFO, only_isis_spice=only_isis_spice, only_naif_spice=only_naif_spice)
 
     if radii is not None:
         # first convert to kilometers for ISD

@@ -1,13 +1,18 @@
+import pyspiceql
 import spiceypy as spice
 
-from ale.base import Driver
+from ale import logger
+from ale.base import Driver, WrongInstrumentException
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
 from ale.base.label_pds3 import Pds3Label
 from ale.base.type_distortion import NoDistortion, ChandrayaanMrffrDistortion
 from ale.base.type_sensor import LineScanner, Radar
+from ale.rotation import ConstantRotation
+from ale.transformation import FrameChain
 from csv import reader
-
+from scipy.spatial.transform import Rotation
+import numpy
 
 class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDistortion, Driver):
 
@@ -33,8 +38,7 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
         : int
           Naif ID code for the sensor frame
         """
-        return self.spiceql_call("translateNameToCode", {"frame": "CH1", "mission": self.spiceql_mission})
-
+        return pyspiceql.translateNameToCode(frame="CH1", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
 
     @property
     def spacecraft_name(self):
@@ -48,7 +52,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
         """
         return self.label['MISSION_ID']
 
-
     @property
     def platform_name(self):
         """
@@ -60,7 +63,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
           Name of the platform that the sensor is on
         """
         return self.label['MISSION_NAME']
-
 
     @property
     def image_lines(self):
@@ -74,7 +76,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
         """
         return self.label.get('RDN_FILE').get('RDN_IMAGE').get('LINES')
 
-
     @property
     def image_samples(self):
         """
@@ -86,7 +87,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
           Number of samples in the image
         """
         return self.label.get('RDN_FILE').get('RDN_IMAGE').get('LINE_SAMPLES')
-
 
     def read_timing_data(self):
         """
@@ -106,7 +106,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
         # Transpose such that each column is a list. Unpack and ignore anything that's not lines and times.
         self._lines, self._utc_times, *_ = zip(*lists)
 
-
     @property
     def ephemeris_start_time(self):
         """
@@ -116,12 +115,11 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
           The start time of the image in ephemeris seconds past the J2000 epoch.
         """
         if not hasattr(self, '_ephemeris_start_time'):
-            et = self.spiceql_call("utcToEt", {"utc" : self.utc_times[0]})
+            et = pyspiceql.utcToEt(utc=self.utc_times[0], searchKernels=self.search_kernels, useWeb=self.use_web)[0]
             et -= (.5 * self.line_exposure_duration)
-            clock_time = self.spiceql_call("doubleEtToSclk", {"frameCode" : self.sensor_frame_id, "et" : et, "mission": self.spiceql_mission})
-            self._ephemeris_start_time = self.spiceql_call("strSclkToEt", {"frameCode" : self.sensor_frame_id, "sclk" : clock_time, "mission" : self.spiceql_mission})
+            clock_time = pyspiceql.doubleEtToSclk(frameCode=self.sensor_frame_id, et=et, mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
+            self._ephemeris_start_time = pyspiceql.strSclkToEt(frameCode=self.sensor_frame_id, sclk=clock_time, mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ephemeris_start_time 
-
 
     @property
     def ephemeris_stop_time(self):
@@ -132,7 +130,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
           The stop time of the image in ephemeris seconds past the J2000 epoch.
         """
         return self.ephemeris_start_time + (self.image_lines * self.exposure_duration)
-                        
 
     @property
     def utc_time_table(self):
@@ -146,7 +143,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
             self._utc_time_table = self.label['UTC_FILE']['^UTC_TIME_TABLE']
         return self._utc_time_table
 
-
     @property
     def utc_times(self):
         """ UTC time of the center of each line
@@ -158,7 +154,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
             return list(reversed(self._utc_times))
         return self._utc_times
       
-
     @property
     def sampling_factor(self):
         """
@@ -179,7 +174,6 @@ class Chandrayaan1M3Pds3NaifSpiceDriver(LineScanner, Pds3Label, NaifSpice, NoDis
         else:
             return 1
 
-                
     @property
     def line_exposure_duration(self):
         """
@@ -224,7 +218,10 @@ class Chandrayaan1M3IsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, 
         inst_id_lookup = {
             "M3" : "CHANDRAYAAN-1_M3"
         }
-        return inst_id_lookup[super().instrument_id] 
+        key = super().instrument_id
+        if key not in inst_id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return inst_id_lookup[key] 
     
     @property
     def sensor_model_version(self):
@@ -253,7 +250,10 @@ class Chandrayaan1MRFFRIsisLabelNaifSpiceDriver(Radar, IsisLabel, NaifSpice, Cha
         inst_id_lookup = {
             "MRFFR" : "CHANDRAYAAN-1_MRFFR"
         }
-        return inst_id_lookup[super().instrument_id] 
+        key = super().instrument_id
+        if key not in inst_id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return inst_id_lookup[key] 
 
     @property
     def spacecraft_name(self):
@@ -280,7 +280,7 @@ class Chandrayaan1MRFFRIsisLabelNaifSpiceDriver(Radar, IsisLabel, NaifSpice, Cha
           start time
         """
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+            self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ephemeris_start_time
 
     @property
@@ -294,9 +294,8 @@ class Chandrayaan1MRFFRIsisLabelNaifSpiceDriver(Radar, IsisLabel, NaifSpice, Cha
           stop time
         """
         if not hasattr(self, "_ephemeris_stop_time"):
-            self._ephemeris_stop_time = self.spiceql_call("utcToEt", {"utc": self.utc_stop_time.strftime("%Y-%m-%d %H:%M:%S.%f")})
+            self._ephemeris_stop_time = pyspiceql.utcToEt(utc=self.utc_stop_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
         return self._ephemeris_stop_time
-
 
     @property
     def ikid(self):
@@ -388,9 +387,8 @@ class Chandrayaan1MRFFRIsisLabelNaifSpiceDriver(Radar, IsisLabel, NaifSpice, Cha
         """
         if not hasattr(self, "range_coefficients_et"):
           range_coefficients_utc = self.label['IsisCube']['Instrument']['RangeCoefficientSet']
-          self._range_coefficients_et = [self.spiceql_call("utcToEt", {"utc": elt[0]}) for elt in range_coefficients_utc]
+          self._range_coefficients_et = [pyspiceql.utcToEt(utc=elt[0], searchKernels=self.search_kernels, useWeb=self.use_web)[0] for elt in range_coefficients_utc]
         return self._range_coefficients_et
-
 
     @property
     def scaled_pixel_width(self):
@@ -415,7 +413,6 @@ class Chandrayaan1MRFFRIsisLabelNaifSpiceDriver(Radar, IsisLabel, NaifSpice, Cha
           scaled pixel height
         """
         return self.label['IsisCube']['Instrument']['ScaledPixelHeight']
-
 
     @property
     def look_direction(self):
@@ -449,3 +446,395 @@ class Chandrayaan1MRFFRIsisLabelNaifSpiceDriver(Radar, IsisLabel, NaifSpice, Cha
                                  f"INS{self.ikid}_ITRANSS": transs,
                                  f"INS{self.ikid}_ITRANSL": transl}
         return self._naif_keywords
+
+class Chandrayaan2TMC2IsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDistortion, Driver):
+    
+    @property
+    def instrument_id(self):
+        """
+        Returns the instrument id for chandrayaan2 terrain mapping camera
+        
+        Returns
+        -------
+        : str
+          Frame Reference for chandrayaan2 terrain mapping camera
+        """
+
+        naif_to_inst_id_lookup = {
+            -152211 : "CH2_TMC_FORE",
+            -152210 : "CH2_TMC_NADIR",
+            -152212 : "CH2_TMC_AFT"
+        }
+        try:
+            return naif_to_inst_id_lookup[self.ikid]
+        except KeyError:
+            raise WrongInstrumentException(f"Unknown instrument ikid: {self.ikid}.")
+   
+    @property
+    def ikid(self):
+        """
+        The NAIF id for the instrument
+        Expects kernels_group to be defined. 
+        
+        Returns
+        -------
+        : int
+          ikid for chandrayaan2 terrain mapping camera
+        """
+        return self.label['IsisCube']['Kernels']['NaifFrameCode']
+    
+    @property
+    def sensor_name(self):
+        """
+        Returns the sensor name
+
+        Returns
+        -------
+        : str
+          sensor name
+        """
+        return self.instrument_id
+    
+    @property
+    def sensor_model_version(self):
+        """
+        The ISIS Sensor model number for Chandrayaan2TMC2 in ISIS. This is likely just 1
+        
+        Returns
+        -------
+        : int
+          ISIS sensor model version
+        """
+        return 1
+
+    @property
+    def ephemeris_start_time(self):
+        """
+        The spacecraft clock start count, frequently used to determine the start time
+        of the image.
+
+        Returns
+        -------
+        : str
+          Spacecraft clock start count
+        """
+        if not hasattr(self, "_ephemeris_start_time"):
+          self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
+        return self._ephemeris_start_time
+
+    @property
+    def ephemeris_time(self):
+        """
+        Forces a reduced set of ephemeris data for chandrayaan2 as
+        many of the images are nearly 200K lines long resulting in
+        ISDs that cannot be loaded correctly into the CSM
+
+        Returns
+        -------
+        : ndarray
+            ephemeris times split based on image lines and ephem_sample_rate passed
+            through props
+        """
+        if not hasattr(self, "_ephemeris_time"):
+            reduction = self._props.get('reduction', 'none').lower()
+            if (reduction == 'none'):
+                logger.warning("Chandrayaan-2 TMC-2: per-line ephemeris ISDs are "
+                               "very large. Defaulting reduction to 'linear'. Pass "
+                               "--reduction linear --ephem_sample_rate N to control "
+                               "the sampling. An explicit --reduction none cannot be "
+                               "respected for this sensor.")
+                self._props['reduction'] = 'linear'
+            self._ephemeris_time = super().ephemeris_time
+        return self._ephemeris_time
+
+    @property
+    def detector_center_line(self):
+        """
+        The center of the CCD in detector pixels
+        Expects ikid to be defined. this should be the integer Naif ID code for
+        the instrument.
+
+        Returns
+        -------
+        list :
+            The line of the center of the CCD, in pixel units
+        """
+        return self.naif_keywords[f"INS{self.ikid}_CENTER"][1] 
+
+    @property
+    def detector_center_sample(self):
+        """
+        The center of the CCD in detector pixels
+        Expects ikid to be defined. this should be the integer Naif ID code for
+        the instrument.
+
+        Returns
+        -------
+        list :
+            The sample coordinate of the center of the CCD, in pixel units
+        """
+        return self.naif_keywords[f"INS{self.ikid}_CENTER"][0]
+
+    @property
+    def focal2pixel_lines(self):
+        """
+        Expects ikid to be defined. This should be an integer containing the
+        Naif ID code for the instrument.
+
+        Returns
+        -------
+        : list<double>
+          focal plane to detector lines
+        """
+        # meters to mm
+        pixel_size = self.naif_keywords[f"INS{self.ikid}_PIXEL_SIZE"] * 1000
+        #return [0.0, 0.0, 1/pixel_size] # old
+        return [0.0, 1/pixel_size, 0.0] # new
+
+    @property
+    def focal2pixel_samples(self):
+        """
+        Expects ikid to be defined. This should be an integer containing the Naif
+        ID code of the instrument
+
+        Returns
+        -------
+        : list<double>
+          focal plane to detector samples
+        """
+        # meters to mm
+        pixel_size = self.naif_keywords[f"INS{self.ikid}_PIXEL_SIZE"] * 1000
+        #return [0.0, -1/pixel_size, 0.0] # old
+        return [0.0, 0.0, 1/pixel_size] # new
+
+    @property
+    def original_naif_sensor_frame_id(self):
+        """
+        Original sensor frame ID as defined in the Chandrayaan 2 IK kernel. A new 
+        sensor frame ID is created in the frame_chain property to represent an
+        additional rotation that takes into account the discrepancy between
+        that the Chandrayaan 2 IK kernel defines and what ISIS expects for the 
+        directions of the axes sensors. The frame chain function below
+        implements the fix.
+
+        Returns
+        -------
+        : int
+          sensor frame code from NAIF's IK kernel
+        """
+        return self.ikid
+
+    @property
+    def sensor_frame_id(self):
+        """
+        Overwrite sensor frame id to return fake frame ID as discussed in
+        original_naif_sensor_frame_id() docstring. 
+
+        Returns
+        -------
+        : int
+          Frame id that applies a correction.
+        """
+        
+        return self.original_naif_sensor_frame_id - 10
+
+class Chandrayaan2OHRCIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDistortion, Driver):
+    
+    @property
+    def instrument_id(self):
+        """
+        Returns the instrument id for chandrayaan2 terrain mapping camera
+        
+        Returns
+        -------
+        : str
+          Frame Reference for Chandrayaan2 Orbiter High Resolution Camera
+        """
+        inst_id_lookup = {
+            "OHRC" : "CH2_OHRC"
+        }
+        key = super().instrument_id
+        if key not in inst_id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return inst_id_lookup[key] 
+    
+    @property
+    def ikid(self):
+        """
+        The NAIF id for the instrument
+        Expects kernels_group to be defined. 
+        
+        Returns
+        -------
+        : int
+          ikid for chandrayaan2 terrain mapping camera
+        """
+        return self.label['IsisCube']['Kernels']['NaifFrameCode']
+    
+    @property
+    def sensor_name(self):
+        """
+        Returns the sensor name
+
+        Returns
+        -------
+        : str
+          sensor name
+        """
+        return self.instrument_id
+    
+    @property
+    def sensor_model_version(self):
+        """
+        The ISIS Sensor model number for Chandrayaan2OHRC in ISIS. This is likely just 1
+        
+        Returns
+        -------
+        : int
+          ISIS sensor model version
+        """
+        return 1
+    
+    @property
+    def ephemeris_start_time(self):
+        """
+        The spacecraft clock start count, frequently used to determine the start time
+        of the image.
+
+        Returns
+        -------
+        : str
+          Spacecraft clock start count
+        """
+        if not hasattr(self, "_ephemeris_start_time"):
+          self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
+        return self._ephemeris_start_time
+
+    @property
+    def ephemeris_stop_time(self):
+        """
+        The spacecraft clock stop count, frequently used to determine the stop time
+        of the image.
+
+        Returns
+        -------
+        : str
+          Spacecraft clock stop count
+        """
+        if not hasattr(self, "_ephemeris_stop_time"):
+            self._ephemeris_stop_time = pyspiceql.utcToEt(utc=self.utc_stop_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]
+        return self._ephemeris_stop_time
+
+    @property
+    def ephemeris_time(self):
+        """
+        Forces a reduced set of ephemeris data for chandrayaan2 as
+        many of the images are nearly 200K lines long resulting in
+        ISDs that cannot be loaded correctly into the CSM
+
+        Returns
+        -------
+        : ndarray
+            ephemeris times split based on image lines and ephem_sample_rate passed
+            through props
+        """
+        if not hasattr(self, "_ephemeris_time"):
+            reduction = self._props.get('reduction', 'none').lower()
+            if (reduction == 'none'):
+                logger.warning("Chandrayaan-2 OHRC: per-line ephemeris ISDs are "
+                               "very large. Defaulting reduction to 'linear'. Pass "
+                               "--reduction linear --ephem_sample_rate N to control "
+                               "the sampling. An explicit --reduction none cannot be "
+                               "respected for this sensor.")
+                self._props['reduction'] = 'linear'
+            self._ephemeris_time = super().ephemeris_time
+        return self._ephemeris_time
+
+    @property
+    def detector_center_line(self):
+        """
+        The center of the CCD in detector pixels
+        Expects ikid to be defined. this should be the integer Naif ID code for
+        the instrument.
+
+        Returns
+        -------
+        list :
+            The line of the center of the CCD, in pixel units
+        """
+        return self.naif_keywords[f"INS{self.ikid}_CENTER"][1] 
+
+    @property
+    def detector_center_sample(self):
+        """
+        The center of the CCD in detector pixels
+        Expects ikid to be defined. this should be the integer Naif ID code for
+        the instrument.
+
+        Returns
+        -------
+        list :
+            The sample coordinate of the center of the CCD, in pixel units
+        """
+        return self.naif_keywords[f"INS{self.ikid}_CENTER"][0]
+
+    @property
+    def focal2pixel_lines(self):
+        """
+        Expects ikid to be defined. This should be an integer containing the
+        Naif ID code for the instrument.
+
+        Returns
+        -------
+        : list<double>
+          focal plane to detector lines
+        """
+        # meters to mm
+        pixel_size = self.naif_keywords[f"INS{self.ikid}_PIXEL_SIZE"] * 1000
+        return [0.0, 1/pixel_size, 0.0]
+    
+    @property
+    def focal2pixel_samples(self):
+        """
+        Expects ikid to be defined. This should be an integer containing the Naif
+        ID code of the instrument
+
+        Returns
+        -------
+        : list<double>
+          focal plane to detector samples
+        """
+        # meters to mm
+        pixel_size = self.naif_keywords[f"INS{self.ikid}_PIXEL_SIZE"] * 1000
+        return [0.0, 0.0, 1/pixel_size]
+
+    @property
+    def original_naif_sensor_frame_id(self):
+        """
+        Original sensor frame ID as defined in the Chandrayaan 2 IK kernel. A new 
+        sensor frame ID is created in the frame_chain property to represent an
+        additional rotation that takes into account the discrepancy between
+        that the Chandrayaan 2 IK kernel defines and what ISIS expects for the 
+        directions of the axes sensors. The frame chain function below
+        implements the fix.
+
+        Returns
+        -------
+        : int
+          sensor frame code from NAIF's IK kernel
+        """
+        return self.ikid
+
+    @property
+    def sensor_frame_id(self):
+        """
+        Overwrite sensor frame id to return fake frame ID as discussed in
+        original_naif_sensor_frame_id() docstring. 
+
+        Returns
+        -------
+        : int
+          Frame id that applies a correction.
+        """
+        
+        return self.original_naif_sensor_frame_id - 10

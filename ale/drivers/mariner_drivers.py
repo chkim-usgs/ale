@@ -1,9 +1,12 @@
+import pyspiceql
+
 from ale.base import spiceql_mission_map
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import Framer
 from ale.base.type_distortion import NoDistortion
 from ale.base.base import Driver
+from ale.base import WrongInstrumentException
 
 class Mariner10IsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion, Driver):
     
@@ -21,7 +24,10 @@ class Mariner10IsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistorti
             "M10_VIDICON_A": "M10_SPACECRAFT",
             "M10_VIDICON_B": "M10_SPACECRAFT"
         }
-        return inst_id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in inst_id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return inst_id_lookup[key]
 
     @property
     def sensor_model_version(self):
@@ -82,7 +88,7 @@ class Mariner10IsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistorti
           start time
         """
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("utcToEt", {"utc": self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f")})  - (self.exposure_duration / 2.0)
+            self._ephemeris_start_time = pyspiceql.utcToEt(utc=self.utc_start_time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0]  - (self.exposure_duration / 2.0)
         return self._ephemeris_start_time
     
     @property

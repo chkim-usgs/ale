@@ -10,10 +10,44 @@
 #
 # SPDX-License-Identifier: CC0-1.0
 
+import os
+import sys
 import unittest
 from unittest.mock import call, patch
 
 import ale.isd_generate as isdg
+
+
+class TestMain(unittest.TestCase):
+
+    @patch.dict(os.environ, {}, clear=True)
+    @patch.object(sys, "argv", ["isd_generate", "dummy.cub"])
+    def test_main_errors_on_missing_alespiceroot(self):
+        with self.assertRaises(SystemExit) as ctx:
+            isdg.main()
+        self.assertIn("ALESPICEROOT", str(ctx.exception))
+
+    @patch.dict(os.environ, {"ALESPICEROOT": "/some/path"})
+    @patch("ale.isd_generate.file_to_isd")
+    @patch.object(sys, "argv", ["isd_generate", "dummy.cub"])
+    def test_main_default_reduction_is_linear(self, m_file_to_isd):
+        isdg.main()
+        self.assertEqual(m_file_to_isd.call_args.kwargs.get("reduction"), "linear")
+
+    @patch.dict(os.environ, {"ALESPICEROOT": "/some/path"})
+    @patch("ale.isd_generate.file_to_isd")
+    @patch.object(sys, "argv", ["isd_generate", "dummy.cub", "--reduction", "none"])
+    def test_main_reduction_none_override(self, m_file_to_isd):
+        isdg.main()
+        self.assertEqual(m_file_to_isd.call_args.kwargs.get("reduction"), "none")
+
+    @patch.dict(os.environ, {"ALESPICEROOT": "/some/path"})
+    @patch("ale.isd_generate.file_to_isd")
+    @patch.object(sys, "argv", ["isd_generate", "dummy.cub", "--ephem_sample_rate", "5"])
+    def test_main_reduction_custom_sample_rate(self, m_file_to_isd):
+        isdg.main()
+        self.assertEqual(m_file_to_isd.call_args.kwargs.get("reduction"), "linear")
+        self.assertEqual(m_file_to_isd.call_args.kwargs.get("ephem_sample_rate"), 5)
 
 
 class TestFile(unittest.TestCase):
@@ -28,7 +62,7 @@ class TestFile(unittest.TestCase):
             cube_str = "dummy.cub"
             isdg.file_to_isd(cube_str)
             self.assertEqual(
-                m_loads.call_args_list, [call(cube_str, props={}, verbose=True, only_isis_spice=False, only_naif_spice=False)]
+                m_loads.call_args_list, [call(cube_str, props={}, verbose=False, only_isis_spice=False, only_naif_spice=False)]
             )
             self.assertEqual(
                 m_path_wt.call_args_list, [call(json_text)]
@@ -41,7 +75,7 @@ class TestFile(unittest.TestCase):
             isdg.file_to_isd(cube_str, out=out_str, kernels=kernel_val)
             self.assertEqual(
                 m_loads.call_args_list,
-                [call(cube_str, props={'kernels': kernel_val}, verbose=True, only_isis_spice=False, only_naif_spice=False)]
+                [call(cube_str, props={'kernels': kernel_val}, verbose=False, only_isis_spice=False, only_naif_spice=False)]
             )
             self.assertEqual(
                 m_path_wt.call_args_list, [call(json_text)]

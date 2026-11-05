@@ -1,3 +1,5 @@
+from pyspiceql import pyspiceql
+
 from ale.base import spiceql_mission_map
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice
@@ -5,7 +7,7 @@ from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import Framer
 from ale.base.type_distortion import NoDistortion
 from ale.base.base import Driver
-from pyspiceql import pyspiceql
+from ale.base import WrongInstrumentException
 
 sensor_name_lookup = {
     "VISUAL_IMAGING_SUBSYSTEM_CAMERA_A" : "Visual Imaging Subsystem Camera A",
@@ -37,7 +39,7 @@ class VikingIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion,
         instrument_id = super().instrument_id
 
         if(instrument_id not in sensor_name_lookup):
-            raise Exception (f'Instrument ID [{instrument_id}] is wrong.')
+            raise WrongInstrumentException (f'Instrument ID [{instrument_id}] is wrong.')
 
         return instrument_id
 
@@ -107,9 +109,11 @@ class VikingIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion,
           ephemeris start time of the image
         """
         if not hasattr(self, "_ephemeris_start_time"):
-            self._ephemeris_start_time = self.spiceql_call("strSclkToEt", {"frameCode": self.alt_ikid, 
-                                                                           "sclk": self.spacecraft_clock_start_count, 
-                                                                           "mission": self.spiceql_mission})
+            self._ephemeris_start_time = pyspiceql.strSclkToEt(frameCode=self.alt_ikid, 
+                                                               sclk=self.spacecraft_clock_start_count, 
+                                                               mission=self.spiceql_mission,
+                                                               searchKernels=self.search_kernels,
+                                                               useWeb=self.use_web)[0]
             if self.exposure_duration <= .420:
                 offset1 = 7.0 / 8.0 * 4.48
             else:
@@ -149,11 +153,13 @@ class VikingIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion,
 
     @property
     def detector_center_line(self):
-        return 0
+        # Boresight line, matching ISIS VikingCamera SetDetectorOrigin(602, 528).
+        return 528.0
 
     @property
     def detector_center_sample(self):
-        return 0
+        # Boresight sample, matching ISIS VikingCamera SetDetectorOrigin(602, 528).
+        return 602.0
 
     @property
     def sensor_model_version(self):
@@ -183,7 +189,7 @@ class VikingIsisLabelIsisSpiceDriver(Framer, IsisLabel, IsisSpice, NoDistortion,
         instrument_id = super().instrument_id
 
         if(instrument_id not in sensor_name_lookup):
-            raise Exception (f'Instrument ID [{instrument_id}] is wrong.')
+            raise WrongInstrumentException (f'Instrument ID [{instrument_id}] is wrong.')
 
         return instrument_id
 
@@ -210,3 +216,54 @@ class VikingIsisLabelIsisSpiceDriver(Framer, IsisLabel, IsisSpice, NoDistortion,
           Name of the spacecraft.
         """
         return spacecraft_name_lookup[super().spacecraft_name]
+
+    @property
+    def focal_length(self):
+        """
+        Override the focal length attribute to return the appropriate viking
+        focal length. Values and logic based on ISIS viking camera model. The
+        ISIS cube has no focal length keyword to read on the IsisSpice path, so
+        it must be supplied here, matching the NaifSpice driver.
+
+        Returns
+        -------
+        : float
+          Focal length of viking instrument
+        """
+        if not hasattr(self, "_focal_length"):
+            if (self.spacecraft_name == "VIKING ORBITER 1"):
+                if (self.sensor_name == "Visual Imaging Subsystem Camera A"):
+                    self._focal_length = 474.398
+                elif (self.sensor_name ==  "Visual Imaging Subsystem Camera B"):
+                    self._focal_length = 474.448
+            elif (self.spacecraft_name == "VIKING ORBITER 2"):
+                if (self.sensor_name == "Visual Imaging Subsystem Camera A"):
+                    self._focal_length = 474.610
+                elif (self.sensor_name ==  "Visual Imaging Subsystem Camera B"):
+                    self._focal_length = 474.101
+            else:
+                raise Exception(f"Unknown viking instrument to get focal length: {self.spacecraft_name}, {self.sensor_name}")
+
+        return self._focal_length
+
+    @property
+    def detector_center_line(self):
+        # Boresight line, matching ISIS VikingCamera SetDetectorOrigin(602, 528).
+        return 528.0
+
+    @property
+    def detector_center_sample(self):
+        # Boresight sample, matching ISIS VikingCamera SetDetectorOrigin(602, 528).
+        return 602.0
+
+    @property
+    def sensor_model_version(self):
+        """
+        Returns the ISIS camera version
+
+        Returns
+        -------
+        : int
+          Camera version number
+        """
+        return 1

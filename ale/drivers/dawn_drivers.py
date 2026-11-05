@@ -1,13 +1,13 @@
 import re
-import spiceypy as spice
 import os
 import math
+
 import numpy as np
-
+import pyspiceql
 from scipy.interpolate import CubicSpline
+import spiceypy as spice
 
-import ale
-from ale.base import Driver
+from ale.base import Driver, WrongInstrumentException
 from ale.base.label_isis import IsisLabel
 from ale.base.data_naif import NaifSpice
 from ale.base.data_isis import IsisSpice
@@ -18,6 +18,7 @@ from ale.base.data_isis import read_table_data
 from ale.base.data_isis import parse_table
 from ale.transformation import TimeDependentRotation
 from ale.transformation import ConstantRotation
+from ale import spiceql_access
 
 ID_LOOKUP = {
     "FC1" : "DAWN_FC1",
@@ -47,7 +48,8 @@ class DawnFcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, Driver):
         """
         instrument_id = super().instrument_id
         filter_number = self.filter_number
-
+        if instrument_id not in ID_LOOKUP:
+            raise WrongInstrumentException(f"Unknown instrument id: {instrument_id}.")
         return "{}_FILTER_{}".format(ID_LOOKUP[instrument_id], filter_number)
 
     @property
@@ -128,7 +130,12 @@ class DawnFcPds3NaifSpiceDriver(Framer, Pds3Label, NaifSpice, Driver):
         : list
           Radial distortion coefficients
         """
-        return self.naif_keywords['INS{}_RAD_DIST_COEFF'.format(self.ikid)]
+        odtk = self.naif_keywords['INS{}_RAD_DIST_COEFF'.format(self.ikid)]
+        # A single-valued NAIF keyword may be returned as a scalar rather than a
+        # list. The distortion coefficients in the ISD must be a list.
+        if not isinstance(odtk, list):
+            odtk = [odtk]
+        return odtk
 
     # TODO: Update focal2pixel samples and lines to reflect the rectangular
     #       nature of dawn pixels
@@ -231,12 +238,17 @@ class DawnFcIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion,
         : str
           instrument id
         """
-        if not hasattr(self, "_instrument_id"):
-          instrument_id = super().instrument_id
-          filter_number = self.filter_number
-          self._instrument_id = "{}_FILTER_{}".format(ID_LOOKUP[instrument_id], filter_number)
+        try: 
+          if not hasattr(self, "_instrument_id"):
+            instrument_id = super().instrument_id
+            filter_number = self.filter_number
+            if instrument_id not in ID_LOOKUP:
+                raise WrongInstrumentException(f"Unknown instrument id: {instrument_id}.")
+            self._instrument_id = "{}_FILTER_{}".format(ID_LOOKUP[instrument_id], filter_number)
 
-        return self._instrument_id
+          return self._instrument_id
+        except KeyError:
+          raise WrongInstrumentException(f"Unknown instrument id. Expected FC1 or FC2 in ISIS label.")
     
     @property
     def filter_number(self):
@@ -415,7 +427,10 @@ class DawnVirIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
           Name of the instrument
         """
         lookup_table = {'VIR': 'Visual and Infrared Spectrometer'}
-        return lookup_table[super().instrument_id]
+        key = super().instrument_id
+        if key not in lookup_table:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return lookup_table[key]
     
     @property
     def sensor_name(self):
@@ -443,7 +458,9 @@ class DawnVirIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
     
     @property
     def focal_length(self):
-      return float(spice.gdpool('INS{}_FOCAL_LENGTH'.format(self.ikid), 0, 1)[0])
+      if not hasattr(self, "_focal_length"):
+        self._focal_length = float(self.naif_keywords['INS{}_FOCAL_LENGTH'.format(self.ikid)])
+      return self._focal_length
     
     @property
     def detector_center_sample(self):
@@ -510,8 +527,10 @@ class DawnVirIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
         : dict
           Dictionary with ScetTimeClock, ShutterStatus, MirrorSin, and MirrorCos
         """
-        isis_bytes = read_table_data(self.label['Table'], self._file)
-        return parse_table(self.label['Table'], isis_bytes)
+        if not hasattr(self, "_housekeeping_table"):
+          isis_bytes = read_table_data(self.label['Table'], self._file)
+          self._housekeeping_table = parse_table(self.label['Table'], isis_bytes)
+        return self._housekeeping_table
     
     @property
     def line_scan_rate(self):
@@ -525,24 +544,26 @@ class DawnVirIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
         : list
           Exposure durations
         """
-        line_times = []
-        start_lines = []
-        exposure_durations = []
+        if not hasattr(self, "_line_scan_rate"):
+          line_times = []
+          start_lines = []
+          exposure_durations = []
 
-        line_no = 0.5
+          line_no = 0.5
 
-        for line_midtime in self.hk_ephemeris_time:
-          if not self.is_calibrated:
-            line_times.append(line_midtime - (self.line_exposure_duration / 2.0) - self.center_ephemeris_time)
-            start_lines.append(line_no)
-            exposure_durations.append(self.label["IsisCube"]["Instrument"]["FrameParameter"][2])
-            line_no += 1
+          for line_midtime in self.hk_ephemeris_time:
+            if not self.is_calibrated:
+              line_times.append(line_midtime - (self.line_exposure_duration / 2.0) - self.center_ephemeris_time)
+              start_lines.append(line_no)
+              exposure_durations.append(self.label["IsisCube"]["Instrument"]["FrameParameter"][2])
+              line_no += 1
 
-        line_times.append(line_times[-1] + self.label["IsisCube"]["Instrument"]["FrameParameter"][2])
-        start_lines.append(line_no)
-        exposure_durations.append(self.label["IsisCube"]["Instrument"]["FrameParameter"][2])
+          line_times.append(line_times[-1] + self.label["IsisCube"]["Instrument"]["FrameParameter"][2])
+          start_lines.append(line_no)
+          exposure_durations.append(self.label["IsisCube"]["Instrument"]["FrameParameter"][2])
+          self._line_scan_rate = start_lines, line_times, exposure_durations
 
-        return start_lines, line_times, exposure_durations
+        return self._line_scan_rate
 
     @property
     def sensor_model_version(self):
@@ -556,53 +577,54 @@ class DawnVirIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
     
     @property
     def optical_angles(self):
-        hk_dict = self.housekeeping_table
-        
-        opt_angles = []
-        x = np.array([])
-        y = np.array([])
-        for index, mirror_sin in enumerate(hk_dict["MirrorSin"]):
-            shutter_status = hk_dict["ShutterStatus"][index].lower().replace(" ", "")
-            is_dark = (shutter_status == "closed")   
+        if not hasattr(self, "_opt_angles"):
+            hk_dict = self.housekeeping_table
+            
+            self._opt_angles = []
+            x = np.array([])
+            y = np.array([])
+            for index, mirror_sin in enumerate(hk_dict["MirrorSin"]):
+                shutter_status = hk_dict["ShutterStatus"][index].lower().replace(" ", "")
+                is_dark = (shutter_status == "closed")   
 
-            mirror_cos = hk_dict["MirrorCos"][index]
+                mirror_cos = hk_dict["MirrorCos"][index]
 
-            scan_elec_deg = math.atan(mirror_sin/mirror_cos) * degs_per_rad
-            opt_ang = ((scan_elec_deg - 3.7996979) * 0.25/0.257812) / 1000
+                scan_elec_deg = math.atan(mirror_sin/mirror_cos) * degs_per_rad
+                opt_ang = ((scan_elec_deg - 3.7996979) * 0.25/0.257812) / 1000
 
-            if not is_dark:
-                x = np.append(x, index + 1)
-                y = np.append(y, opt_ang)
+                if not is_dark:
+                    x = np.append(x, index + 1)
+                    y = np.append(y, opt_ang)
 
-            if not self.is_calibrated:
-                opt_angles.append(opt_ang)
+                if not self.is_calibrated:
+                    self._opt_angles.append(opt_ang)
 
-        cs = CubicSpline(x, y, extrapolate="periodic")
+            cs = CubicSpline(x, y, extrapolate="periodic")
 
-        for i, opt_ang in enumerate(opt_angles):
-          shutter_status = hk_dict["ShutterStatus"][i].lower().replace(" ", "")
-          is_dark = (shutter_status == "closed")
+            for i, opt_ang in enumerate(self._opt_angles):
+              shutter_status = hk_dict["ShutterStatus"][i].lower().replace(" ", "")
+              is_dark = (shutter_status == "closed")
 
-          if (is_dark):
-            if (i == 0):
-              opt_angles[i] = opt_angles[i+1]
-            elif (i == len(opt_angles) - 1):
-              opt_angles[i] = opt_angles[i-1]
-            else:
-              opt_angles[i] = cs(i+1)
+              if (is_dark):
+                if (i == 0):
+                  self._opt_angles[i] = self._opt_angles[i+1]
+                elif (i == len(self._opt_angles) - 1):
+                  self._opt_angles[i] = self._opt_angles[i-1]
+                else:
+                  self._opt_angles[i] = cs(i+1)
 
-        return opt_angles
+        return self._opt_angles
     
     @property
     def hk_ephemeris_time(self):
-
-        line_times = []
+      if not hasattr(self, "_hk_ephemeris_time"):
+        self._hk_ephemeris_time = []
         scet_times = self.housekeeping_table["ScetTimeClock"]
         for scet in scet_times:
-          line_midtime = spice.scs2e(self.spacecraft_id, scet)
-          line_times.append(line_midtime)
+          line_midtime = pyspiceql.strSclkToEt(frameCode=self.spacecraft_id, sclk=scet, mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
+          self._hk_ephemeris_time.append(line_midtime)
 
-        return line_times
+      return self._hk_ephemeris_time
     
     @property
     def ephemeris_start_time(self):
@@ -663,9 +685,10 @@ class DawnVirIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
 
     @property
     def frame_chain(self):
-      frame_chain = super().frame_chain
-      frame_chain.add_edge(rotation=self.inst_pointing_rotation)
-      return frame_chain
+      if not hasattr(self, "_frame_chain"):
+        self._frame_chain = super().frame_chain
+        self._frame_chain.add_edge(rotation=self.inst_pointing_rotation)
+      return self._frame_chain
     
     @property
     def inst_pointing_rotation(self):
@@ -677,30 +700,39 @@ class DawnVirIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, NoDisto
         : TimeDependentRotation
           Instrument pointing rotation
         """
-        time_dep_quats = np.zeros((len(self.hk_ephemeris_time), 4))
-        avs = []
+        if not hasattr(self, "_inst_pointing_rotation"):
+          time_dep_quats = np.zeros((len(self.hk_ephemeris_time), 4))
+          avs = []
 
-        for i, time in enumerate(self.hk_ephemeris_time):
-          try:
-            state_matrix = spice.sxform("J2000", spice.frmnam(self.sensor_frame_id), time)
-          except:
-            rotation_matrix = spice.pxform("J2000", spice.frmnam(self.sensor_frame_id), time)
-            state_matrix = spice.rav2xf(rotation_matrix, [0, 0, 0])
+          rotations = pyspiceql.getTargetOrientations(ets=self.hk_ephemeris_time, 
+                                                      toFrame=self.sensor_frame_id, 
+                                                      refFrame=1, 
+                                                      mission=self.spiceql_mission, 
+                                                      searchKernels=self.search_kernels, 
+                                                      useWeb=self.use_web)[0]
 
-          opt_angle = self.optical_angles[i]
-          
-          xform = spice.eul2xf([0, -opt_angle, 0, 0, 0, 0], 1, 2, 3)
-          xform2 = spice.mxmg(xform, state_matrix)
+          for i, rotation in enumerate(rotations):
+            quaternion = rotation[:4]
+            av = [0, 0, 0]
+            if (len(rotation) > 4):
+              av = rotation[4:]
+            rotation_matrix = spice.q2m(quaternion)
+            state_matrix = spice.rav2xf(rotation_matrix, av)
 
-          rot_mat, av = spice.xf2rav(xform2)
-          avs.append(av)
+            opt_angle = self.optical_angles[i]
+            
+            xform = spice.eul2xf([0, -opt_angle, 0, 0, 0, 0], 1, 2, 3)
+            xform2 = spice.mxmg(xform, state_matrix)
 
-          quat_from_rotation = spice.m2q(rot_mat)
-          time_dep_quats[i,:3] = quat_from_rotation[1:]
-          time_dep_quats[i, 3] = quat_from_rotation[0]
+            rot_mat, av = spice.xf2rav(xform2)
+            avs.append(av)
 
-        time_dep_rot = TimeDependentRotation(time_dep_quats, self.hk_ephemeris_time, 1, self.sensor_frame_id, av=avs)
+            quat_from_rotation = spice.m2q(rot_mat)
+            time_dep_quats[i,:3] = quat_from_rotation[1:]
+            time_dep_quats[i, 3] = quat_from_rotation[0]
 
-        return time_dep_rot
+          self._inst_pointing_rotation = TimeDependentRotation(time_dep_quats, self.hk_ephemeris_time, 1, self.sensor_frame_id, av=avs)
+
+        return self._inst_pointing_rotation
 
     

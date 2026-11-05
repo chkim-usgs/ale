@@ -3,8 +3,10 @@ import math
 import os
 import requests
 
-from multiprocessing.pool import ThreadPool
 import numpy as np
+
+from ale import util
+from concurrent.futures import ThreadPoolExecutor
 
 import pyspiceql
 
@@ -53,10 +55,10 @@ def check_response(response):
     response.raise_for_status()
 
     if response.status_code != 200:
-        raise requests.HTTPError(f"Recieved code {response.status_code} from spice server, with error: {response.json()}")
+        raise requests.HTTPError(f"Received code {response.status_code} from spice server, with error: {response.json()}")
 
     if response.json()["statusCode"] != 200:
-        raise requests.HTTPError(f"Recieved code {response.json()['statusCode']} from spice server, with error: {response.json()['body']}")
+        raise requests.HTTPError(f"Received code {response.json()['statusCode']} from spice server, with error: {response.json()['body']}")
 
 
 def spiceql_call(function_name = "", function_args = {}, use_web=False):
@@ -85,16 +87,31 @@ def spiceql_call(function_name = "", function_args = {}, use_web=False):
     Returns : any
                 Any return from a SpiceQL function
     """
+    logger.debug(f"Calling {function_name} with args: {function_args}")
     if use_web == False:
+        function_args["useWeb"] = False
+        ephem_funcs = ["getTargetStates", "getTargetOrientations"]
+        if function_name in ephem_funcs and "ets" not in function_args.keys():
+            if ("startEt" in function_args.keys() and 
+                "stopEt" in function_args.keys() and 
+                "numRecords" in function_args.keys()):
+                start = function_args.pop("startEt")
+                stop = function_args.pop("stopEt")
+                num_records = function_args.pop("numRecords")
+                ets = np.linspace(start, stop, num_records)
+                function_args['ets'] = ets
+            else:
+                raise RuntimeError(f"No ephemeris data provided, {function_name} needs 'ets' or " + 
+                                    "'startEt', 'stopet', 'numRecords' in `function_args`")
         func = getattr(pyspiceql, function_name)
-        return func(**function_args)[0]
+        ret = func(**function_args)[0]
+        return ret
     
     if spiceql_url:
         url = spiceql_url
     else:
-        url = "https://spiceql-deployment.prod-asc.chs.usgs.gov/"
+        url = "https://astrogeology.usgs.gov/apis/spiceql/latest/"
 
-    logger.info(f"SpiceQL Base URL: {url}")
     url += function_name
     headers = {
         'accept': '*/*',
@@ -104,13 +121,31 @@ def spiceql_call(function_name = "", function_args = {}, use_web=False):
     # Convert any args being passed over the wire to strings
     clean_function_args = stringify_web_args(function_args)
     logger.debug("Args: " + str(clean_function_args))
-    response = requests.get(url, params=clean_function_args, headers=headers, verify=False)
-    logger.debug("Complete URL: " + str(response.url))
-    check_response(response)
 
+    # if it's using ets lists, use post 
+    if function_name == "getTargetStates" and "ets" in function_args.keys():
+        post_body = str(clean_function_args).replace("\'", "\"")
+        logger.debug("getTargetStates POST Payload: " + post_body)
+        response = requests.post(url, data=post_body, headers=headers, verify=False)
+    else:
+        response = requests.get(url, params=clean_function_args, headers=headers, verify=False)
+
+    response.raise_for_status(); 
+    if response.status_code != 200:
+        raise requests.HTTPError(f"{response.url} Received code {response.status_code} from spice server, with error: {response.json()}")
+    if response.json()["statusCode"] != 200:
+        raise requests.HTTPError(f"{response.url} Received code {response.json()['statusCode']} from spice server, with error: {response.json()['body']}")
+
+    logger.debug(f"Request URL={str(response.url)}")
+    logger.debug(f"Kernels={str(response.json()['body']['kernels'])}")
+    if logger.isEnabledFor(logging.DEBUG):
+        if isinstance(response.json()['body']['return'], list) and len(response.json()['body']['return']) > 100:
+            datastr = response.json()['body']['return'][:10] + [f"..."] + response.json()['body']['return'][-10:]
+        else:
+            datastr = str(response.json()['body']['return'])
     return response.json()["body"]["return"]
 
-def get_ephem_data(times, function_name, batch_size=400, web=False, function_args={}):
+def get_ephem_data(times, function_name, batch_size=300, web=False, function_args={}):
     """
     This function provides access to ephemeris data aquisition in spiceql. 
     For the web service there is a limited number of times that can be
@@ -148,6 +183,7 @@ def get_ephem_data(times, function_name, batch_size=400, web=False, function_arg
               requested in times.
     """
     valid_functions = ["getTargetOrientations", "getTargetStates"]
+    
     if function_name not in valid_functions:
         raise ValueError(f"The function name {function_name} is not supported "
                           "by this function please pass one of the following: " + str(valid_functions))
@@ -158,15 +194,18 @@ def get_ephem_data(times, function_name, batch_size=400, web=False, function_arg
       return ephemeris_data
     
     batches = math.ceil(len(times) / batch_size)
-    job_args_list = []
-    for i in range(1, batches+1):
-        batch_times = times[(i - 1) * batch_size: i * batch_size]
-        func_args = {**function_args}
-        func_args["ets"] = batch_times
-        job_args_list.append([function_name, func_args, web])
-    with ThreadPool() as pool:
-        jobs = pool.starmap_async(spiceql_call, job_args_list)
-        results = jobs.get()
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = []
+        for i in range(1, batches+1):
+            batch_times = times[(i - 1) * batch_size: i * batch_size]
+            func_args = {**function_args}
+            func_args["ets"] = batch_times
+            futures.append(executor.submit(spiceql_call, function_name, func_args, web))
+
+        results = []
+        for i in range(0, len(futures)):
+            results.append(futures[i].result())
+
 
     flat_results = []
     for i in results:

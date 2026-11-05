@@ -1,12 +1,14 @@
 import numpy as np
+import pyspiceql
 import pvl
 
-from ale.base import Driver
+from ale.base import Driver, WrongInstrumentException
 from ale.base.type_distortion import NoDistortion, LegendreDistortion
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import Framer
 from ale.base.type_sensor import LineScanner
+from ale import logger
 
 class NewHorizonsLorriIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoDistortion, Driver):
     """
@@ -28,11 +30,10 @@ class NewHorizonsLorriIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, NoD
         id_lookup = {
             "LORRI" : "NH_LORRI"
         }
-        return id_lookup[super().instrument_id]
-
-    @property
-    def ephemeris_stop_time(self):
-        return super().ephemeris_start_time
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
     @property
     def ikid(self):
@@ -121,7 +122,10 @@ class NewHorizonsLeisaIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice
         id_lookup = {
             "LEISA" : "NH_RALPH_LEISA"
         }
-        return id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
     @property
     def ikid(self):
@@ -268,7 +272,10 @@ class NewHorizonsMvicIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, Lege
         id_lookup = {
           "MVIC_FRAMING" : "NH_MVIC"
         }
-        return id_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
 
     @property
@@ -321,7 +328,12 @@ class NewHorizonsMvicIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, Lege
         : list
           Optical distortion x coefficients
         """
-        return self.naif_keywords['INS{}_DISTORTION_COEF_X'.format(self.parent_id)]
+        odtx = self.naif_keywords['INS{}_DISTORTION_COEF_X'.format(self.parent_id)]
+        # A single-valued NAIF keyword may be returned as a scalar rather than a
+        # list. The distortion coefficients in the ISD must be a list.
+        if not isinstance(odtx, list):
+            odtx = [odtx]
+        return odtx
 
 
     @property
@@ -334,7 +346,12 @@ class NewHorizonsMvicIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, Lege
         : list
           Optical distortion y coefficients
         """
-        return self.naif_keywords['INS{}_DISTORTION_COEF_Y'.format(self.parent_id)]
+        odty = self.naif_keywords['INS{}_DISTORTION_COEF_Y'.format(self.parent_id)]
+        # A single-valued NAIF keyword may be returned as a scalar rather than a
+        # list. The distortion coefficients in the ISD must be a list.
+        if not isinstance(odty, list):
+            odty = [odty]
+        return odty
 
     @property
     def band_times(self):
@@ -342,9 +359,11 @@ class NewHorizonsMvicIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, Lege
             band_times = self.label['IsisCube']['BandBin']['UtcTime']
             self._ephem_band_times = []
             for time in band_times:
-                if type(time) is pvl.Quantity:
-                   time = time.value
-                self._ephem_band_times.append(self.spiceql_call("utcToEt", {"utc": time.strftime("%Y-%m-%d %H:%M:%S.%f")}))
+                if isinstance(time, pvl.collections.Quantity):
+                    time = time.value
+                elif isinstance(time, dict):
+                    time = time["value"]
+                self._ephem_band_times.append(pyspiceql.utcToEt(utc=time.strftime("%Y-%m-%d %H:%M:%S.%f"), searchKernels=self.search_kernels, useWeb=self.use_web)[0])
         return self._ephem_band_times
 
 
@@ -410,7 +429,7 @@ class NewHorizonsMvicIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, Lege
         """
         if not hasattr(self, "_naif_keywords"):
             self._naif_keywords = {**super().naif_keywords,
-                                   **self.spiceql_call("findMissionKeywords", {"key": f"INS{self.parent_id}_DISTORTION_COEF_*", "mission": self.spiceql_mission})}
+                                   **pyspiceql.findMissionKeywords(key=f"INS{self.parent_id}_DISTORTION_COEF_*", mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]}
         return self._naif_keywords
 
 class NewHorizonsMvicTdiIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpice, LegendreDistortion, Driver):
@@ -446,7 +465,11 @@ class NewHorizonsMvicTdiIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpi
         id_lookup = {
             "MVIC_TDI" : "ISIS_NH_RALPH_MVIC_METHANE"
         }
-        return id_lookup[super().instrument_id]
+        
+        key = super().instrument_id
+        if key not in id_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return id_lookup[key]
 
     @property
     def ikid(self):
@@ -458,9 +481,11 @@ class NewHorizonsMvicTdiIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpi
             # Attempt to get the frame code using frame name,
             # If that fails, try to get it directly from the cube label
             try:
-                self._ikid = self.spiceql_call("translateNameToCode", {"frame": self.instrument_id, "mission": self.spiceql_mission})
-            except:
+                self._ikid = pyspiceql.translateNameToCode(frame=self.instrument_id, mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
+            except Exception as e:
+                logger.debug("Failed to get with spiceql: {e}")
                 self._ikid = self.label["IsisCube"]["Kernels"]["NaifFrameCode"].value
+        logger.debug("IKID: {}".format(self._ikid))
         return self._ikid
 
     @property
@@ -523,7 +548,12 @@ class NewHorizonsMvicTdiIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpi
         : list
           Optical distortion x coefficients
         """
-        return self.naif_keywords['INS{}_DISTORTION_COEF_X'.format(self.parent_id)]
+        odtx = self.naif_keywords['INS{}_DISTORTION_COEF_X'.format(self.parent_id)]
+        # A single-valued NAIF keyword may be returned as a scalar rather than a
+        # list. The distortion coefficients in the ISD must be a list.
+        if not isinstance(odtx, list):
+            odtx = [odtx]
+        return odtx
 
     @property
     def odty(self):
@@ -535,7 +565,12 @@ class NewHorizonsMvicTdiIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpi
         : list
           Optical distortion y coefficients
         """
-        return self.naif_keywords['INS{}_DISTORTION_COEF_Y'.format(self.parent_id)]
+        odty = self.naif_keywords['INS{}_DISTORTION_COEF_Y'.format(self.parent_id)]
+        # A single-valued NAIF keyword may be returned as a scalar rather than a
+        # list. The distortion coefficients in the ISD must be a list.
+        if not isinstance(odty, list):
+            odty = [odty]
+        return odty
 
     @property
     def naif_keywords(self):
@@ -548,8 +583,12 @@ class NewHorizonsMvicTdiIsisLabelNaifSpiceDriver(LineScanner, IsisLabel, NaifSpi
           Dictionary of keywords and values that ISIS creates and attaches to the label
         """
         if not hasattr(self, "_naif_keywords"):
+            new_horizons_keywords = pyspiceql.findMissionKeywords(key=f"INS{self.parent_id}_DISTORTION_COEF_*", 
+                                                                  mission=self.spiceql_mission, 
+                                                                  searchKernels=self.search_kernels,
+                                                                  useWeb=self.use_web)[0]
             self._naif_keywords = {**super().naif_keywords,
-                                   **self.spiceql_call("findMissionKeywords", {"key": f"INS{self.parent_id}_DISTORTION_COEF_*", "mission": self.spiceql_mission})}
+                                   **new_horizons_keywords}
         return self._naif_keywords
 
     @property

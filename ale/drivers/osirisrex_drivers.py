@@ -1,13 +1,13 @@
-import ale
+import pyspiceql
+
 from ale.base.data_naif import NaifSpice
 from ale.base.label_isis import IsisLabel
 from ale.base.type_sensor import Framer
 from ale.base.base import Driver
 from ale.base.type_distortion import RadialDistortion
+from ale.base import WrongInstrumentException
 
 from ale import util
-
-
 
 class OsirisRexCameraIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, RadialDistortion, Driver):
     @property
@@ -27,7 +27,10 @@ class OsirisRexCameraIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, Radi
         "PolyCam" : "POLYCAM",
         "SamCam" : "SAMCAM"
         }
-        return 'ORX_OCAMS_' + sensor_lookup[super().instrument_id]
+        key = super().instrument_id
+        if key not in sensor_lookup:
+            raise WrongInstrumentException(f"Unknown instrument id: {key}.")
+        return 'ORX_OCAMS_' + sensor_lookup[key]
     
     @property
     def polyCamFocusPositionNaifId(self):
@@ -138,11 +141,12 @@ class OsirisRexCameraIsisLabelNaifSpiceDriver(Framer, IsisLabel, NaifSpice, Radi
         : dict
           Dictionary of keywords and values that ISIS creates and attaches to the label
         """
-        keywords = self.spiceql_call("findMissionKeywords", {"key": str(self.polyCamFocusPositionNaifId), "mission" : self.spiceql_mission})
-        if keywords: 
-          return super().naif_keywords | keywords 
-        else: 
-          return super().naif_keywords 
+        if not hasattr(self, "_naif_keywords"):
+          keywords = pyspiceql.findMissionKeywords(key=str(self.polyCamFocusPositionNaifId), mission=self.spiceql_mission, searchKernels=self.search_kernels, useWeb=self.use_web)[0]
+          self._naif_keywords = super().naif_keywords
+          if keywords: 
+            self._naif_keywords = self._naif_keywords | keywords 
+        return self._naif_keywords
 
     @property
     def sensor_model_version(self):
