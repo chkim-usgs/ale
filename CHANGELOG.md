@@ -36,15 +36,35 @@ release.
 ## [Unreleased]
 
 ### Added
+- The NEAR MSI driver now emits the single-parameter radial optical distortion (from the `INS<ikid>_K1` coefficient) that ISIS models, and subtracts 0.5 from the detector center to match the ISIS 0.5-based detector-coordinate convention. The resulting CSM camera agrees with the ISIS camera to sub-pixel (cam_test pixel difference drops from ~0.7 px to ~1e-8 px on a real NEAR MSI image). [#740](https://github.com/DOI-USGS/ale/pull/740)
+- The Clementine NIR camera now emits the single-parameter radial optical distortion (k1 = -0.0006364, as in the ISIS `NirCamera` + `RadialDistortionMap`) that ISIS models, and subtracts 0.5 from its detector center to match the ISIS 0.5-based detector-coordinate convention. The resulting CSM camera agrees with the ISIS camera to sub-pixel (cam_test pixel difference drops from ~1.2 px median, ~6 px max to ~1e-7 px on a real Clementine NIR image). The UVVIS, HiRes and LWIR Clementine cameras are unchanged; only NIR is modeled here. [#740](https://github.com/DOI-USGS/ale/pull/740)
+
+### Fixed
+- Fixed Messenger MDIS to include Taylor distortion to match ISIS' implementation. [#757](https://github.com/DOI-USGS/ale/pull/757)
+- `evaluateCubicHermiteFirstDeriv` now checks that `y` has as many points as the derivatives and times, instead of reading past the end of `y`. [#749](https://github.com/DOI-USGS/ale/pull/749)
+- Cassini ISS drivers now produce a CSM camera that matches ISIS (ASP cam_test on a NAC image shows the ISIS-SPICE, NAIF-SPICE and PDS3 drivers agree with ISIS to ~5e-4 px). Fixes:
+  - ISIS-SPICE driver: emit the radial optical distortion (was none).
+  - ISIS-SPICE and NAIF-SPICE drivers: subtract 0.5 from the detector center (ISIS 0.5-based to CSM 0-based).
+  - NAIF-SPICE driver: `focal_length` no longer raises `AttributeError` when `INS_FOCAL_LENGTH` is defined.
+  - NAIF-SPICE driver: `ephemeris_start_time` uses the scalar from `utcToEt` (was a tuple). [#739](https://github.com/DOI-USGS/ale/pull/739)
+
+### Changed
+- `isd_generate`: default `--reduction` to `linear` (sampling every 10th line for line-scan images with >= 1000 lines). This avoids creating oversized ISDs (tens of thousands of pose samples) for long line-scan sensors such as LRO NAC, MRO CTX, and HRSC. Pass `--reduction none` to disable reduction and restore per-line sampling. [#744](https://github.com/DOI-USGS/ale/pull/744)
+
+## [1.3.0] - 2026-08-25
+
+### Added
 - Added order-8 Lagrange interpolation of quaternions to `ale::Orientations`, matching ISIS SpiceRotation, selectable via the new `LAGRANGE_ROTATION` interpolation type. [#726](https://github.com/DOI-USGS/ale/pull/726)
 - Re-enabled and fixed the TGO CaSSIS driver, which now emits the CaSSIS rational distortion. Validated against ISIS to within ~0.013 pixel across 130 framelets of two real stereo pairs. [#720](https://github.com/DOI-USGS/ale/pull/720)
 - `MroHiRisePds3LabelNaifSpiceDriver`, a PDS3 EDR label driver for HiRISE that generates an ISD directly from a raw EDR label without requiring an ISIS cube, paralleling the existing CTX PDS3 driver. [#702](https://github.com/DOI-USGS/ale/pull/702)
 - Added a catch to try correcting paths in metakernels (using spice_root) if they have been left as default. [#703](https://github.com/DOI-USGS/ale/pull/703)
 - Added ISD to kernel feature [#602](https://github.com/DOI-USGS/ale/issues/602)
+- Added the ability to reduce the ephemeris positions via a hermite spline [#731](https://github.com/DOI-USGS/ale/pull/731)
 
 ### Changed
 - Reordered the `ale::DistortionType` enum so `RADIAL` and `TRANSVERSE` come in the same order as the matching enum in USGSCSM. The two enums are meant to share integer values (USGSCSM stores the selected type as this integer in the model state), but they had `RADIAL` and `TRANSVERSE` swapped. ALE never serializes this integer, it emits the distortion by name in the ISD, so aligning the ALE order to USGSCSM changes no on-disk data and only removes the mismatch. [#728](https://github.com/DOI-USGS/ale/pull/728)
 - The KPLO ShadowCam driver now subsamples the ephemeris by default (linear reduction, one sample per ~10 lines), as the Chandrayaan-2 driver does, so ISDs for the long ShadowCam strips no longer reach ~20 MB. When the driver defaults the reduction (including when the caller passes `--reduction none`, which cannot be respected for this sensor), it now logs a notice via the ale logger. The Chandrayaan-2 TMC-2 and OHRC drivers, which override the reduction the same way, log the same notice. [#719](https://github.com/DOI-USGS/ale/pull/719)
+- Updated web CK generation in isd_to_kernel to use SpiceQL's `etsToSclkTicks`. [#733](https://github.com/DOI-USGS/ale/pull/733)
 
 ### Fixed
 - `getDistortionModel` now throws on an unrecognized distortion model name in the ISD instead of silently returning `TRANSVERSE`. The silent default applied the wrong distortion, or none, with no warning, and it masked typos and unsupported models. [#728](https://github.com/DOI-USGS/ale/pull/728)
@@ -54,6 +74,10 @@ release.
 - Fixed printing kernel info via Error message, now a debug message instead. [#717](https://github.com/DOI-USGS/ale/pull/717)
 - Fixed CLOCK_ET in GTIFFs when they are not slash-separated [#718](https://github.com/DOI-USGS/ale/pull/718)
 - Fixed the metakernel lookup so `isd_generate` works out of the box for TGO CaSSIS: `get_metakernels` now reads the year and version from a filename by pattern (fixing multi-segment names such as OSIRIS-REx `orx_noola_2020_v06`) and skips forecast/planning metakernels (`predicted`, `plan`, `flip`) so the observation metakernel is selected, and `get_kernels_from_metakernel` resolves a relative `PATH_VALUES` against the metakernel's own directory. [#725](https://github.com/DOI-USGS/ale/pull/725)
+- Completed the TGO CaSSIS driver on the NaifSpice path so `isd_generate` produces a correct ISD from the mission metakernel. Several CaSSIS instrument constants are defined only in the ISIS addendum kernel (`tgoCassisAddendum`), not in any NAIF instrument kernel, so on the NaifSpice path they were read as null or False. The driver now returns them directly, following the Cassini driver precedent: the focal length, the focal-plane to pixel transforms (ITRANSS and ITRANSL), the CaSSIS optical distortion model, and the light-time flags (LT_SURFACE_CORRECT, SWAP_OBSERVER_TARGET, and LIGHTTIME_CORRECTION set to LT+S). Without the light-time flags the camera center was offset by about 96 m from the ISIS camera. The resulting CSM camera matches the ISIS camera to a few thousandths of a pixel. [#732](https://github.com/DOI-USGS/ale/pull/732)
+- Fixed the Viking Orbiter VIS CSM camera, which was offset by about 800 pixels from the ISIS camera. The driver returned a detector center of (0, 0), the detector corner, instead of the array center (sample 602, line 528) used by the ISIS `VikingCamera` model, so the CSM boresight was in the wrong place. In addition, `VikingIsisLabelIsisSpiceDriver` did not define the focal length, detector center, or sensor model version at all, so `isd_generate --only_isis_spice` produced an ISD with a null focal length and detector center that usgscsm could not build a camera from. Both Viking drivers now set the detector center to (602, 528), and the IsisSpice driver supplies the focal length and detector center, matching the NaifSpice driver and the ISIS camera. The resulting CSM camera agrees with the ISIS camera except for the Viking VIS optical distortion, which ISIS models and the distortion-free CSM frame model does not. [#734](https://github.com/DOI-USGS/ale/pull/734)
+- Fixed `ClipperEISWACPBIsisLabelNaifSpiceDriver` detector information to comply with EIS SIS [#735](https://github.com/DOI-USGS/ale/pull/735)
+- Fixed `isd_generate` writing a single-coefficient optical distortion as a scalar instead of a list, so USGSCSM could not parse it and failed to build the camera. The radial (`odtk`) and transverse (`odtx`/`odty`) distortion coefficients are now always returned as a list. The guard is applied in the base `NaifSpice` layer so every driver is covered, in addition to the drivers that override these properties. This was observed on LRO NAC (`lrolrocnac`), Dawn FC (`dawnfc`), and Galileo SSI; the Galileo SSI CSM distortion path is not otherwise exercised, so for it the fix only makes the ISD well-formed. [#736](https://github.com/DOI-USGS/ale/pull/736)
 
 ## [1.2.0] - 2026-05-20
 
@@ -68,6 +92,9 @@ release.
 - Throw error when input file does not exist. [#692](https://github.com/DOI-USGS/ale/pull/692)
 - Read in ISIS SPICE Tables from GDAL .tiff [#697](https://github.com/DOI-USGS/ale/pull/697)
 - Changed all `spiceql_call` functions to use pyspiceql [#695](https://github.com/DOI-USGS/ale/pull/695)
+
+### Removed
+- Removed isis_formatter and usgscsm_formatter. Ale formatter will always be used. [#737](https://github.com/DOI-USGS/ale/pull/737)
 
 ### Fixed
 - Fixed Eigen 5.x compatibility by removing version constraint in CMakeLists.txt [#677](https://github.com/DOI-USGS/ale/pull/677)
